@@ -820,7 +820,7 @@ namespace ufo
               part++;
             }
 
-            bool tmpres = simpleSMTcheck(s);
+            tribool tmpres = simpleSMTcheck(s);
             if (tmpres)
             {
               if (verbose) outs() << string(sp, ' ') << "{\n" << string(sp+2, ' ') <<
@@ -1025,6 +1025,7 @@ namespace ufo
               }
             }
           }
+
           // backtrack:
           if (verbose) outs () << string(sp, ' ') << "backtrack to: " << *subgoal << "\n";
         }
@@ -1459,7 +1460,7 @@ namespace ufo
       }
 
       if (verbose) outs() << "\nBase case:       " << *baseSubgoal << "\n{\n";
-      bool baseres = simpleSMTcheck(baseSubgoal);
+      tribool baseres = simpleSMTcheck(baseSubgoal);
       if (baseres)
       {
         if (verbose) outs() << "  proven trivially\n";
@@ -1573,7 +1574,7 @@ namespace ufo
       rewriteHistory.clear();
       rewriteSequence.clear();
 
-      bool indres = simpleSMTcheck(indSubgoal);
+      tribool indres = simpleSMTcheck(indSubgoal);
       if (indres)
       {
         if (verbose) outs() << "  proven trivially\n}\n";
@@ -1735,7 +1736,7 @@ namespace ufo
       return NULL;
     }
 
-    bool solveNoind(int do_rewrite = true, int rounds = 2)
+    tribool solveNoind(int do_rewrite = true, int rounds = 2)
     {
       if (do_rewrite)
       {
@@ -1779,7 +1780,7 @@ namespace ufo
       else return false;
     }
 
-    bool solve()
+    tribool solve()
     {
       unfoldGoal();
       rewriteHistory.push_back(goal);
@@ -1814,19 +1815,19 @@ namespace ufo
           }
         }
       }
-      bool res = simpleSMTcheck(goal);
+      tribool res = simpleSMTcheck(goal);
       if (verbose)
       {
         if (res) outs () << "Proved (with Z3)\n";
-        else outs () << "Unknown\n";
+        else return indeterminate;
       }
       return res;
     }
 
-    bool simpleSMTcheck(Expr goal)
+    tribool simpleSMTcheck(Expr goal)
     {
       if (!useZ3) return false;
-      return (bool)u.implies(conjoin(assumptions, efac), goal);
+      return u.implies(conjoin(assumptions, efac), goal);
     }
   };
 
@@ -1841,28 +1842,37 @@ namespace ufo
 
     ExprSet cnjs;
     getConj(s, cnjs);
-    for (auto & c : cnjs)
+    for (auto c : cnjs)
     {
-      if (isOpX<NEG>(c))
+      bool possibleGoal = false;
+      if (isOpX<NEG>(c) || isOpX<EXISTS>(c))
+        possibleGoal = true;
+
+      if (possibleGoal)
       {
-        if (goal != NULL) assert (0 && "cannot identify goal (two asserts with negged formulas)");
-        goal = regularizeQF(c->left());
+        if (goal != NULL)
+        {
+          errs() << "WARNING: two (or more) asserts that qualify to be a goal."
+                 << "\nUsing one of those.\n";
+          if (isOpX<FORALL>(goal)) possibleGoal = false;
+        }
       }
+
+      if (possibleGoal)
+        goal = regularizeQF(mkNeg(c));
       else
-      {
         assumptions.push_back(regularizeQF(c));
-      }
     }
 
     if (goal == NULL)
     {
-      outs () << "Unable to parse the query\n";
+      outs () << "Unable to detect the goal\n";
       return;
     }
 
     ADTSolver sol (goal, assumptions, constructors, 0, 0, maxDepth, maxGrow, mergingIts, earlySplit, verbose, useZ3, to);
-    bool res = isOpX<FORALL>(goal) ? sol.solve() : sol.solveNoind();
-    outs () << (res ? "unsat\n" : "sat\n");
+    tribool res = isOpX<FORALL>(goal) ? sol.solve() : sol.solveNoind();
+    outs () << (res ? "unsat\n" : (!res ? "sat\n" : "unknown\n"));
   }
 }
 
