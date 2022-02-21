@@ -4864,16 +4864,32 @@ namespace ufo
 
   void getSubterms(Expr e, ExprVector& t)
   {
-    if (isOpX<FAPP>(e) || isOp<NumericOp>(e) || isOp<BoolOp>(e))
+    if ((isOpX<FAPP>(e) || isOp<NumericOp>(e) || isOp<BoolOp>(e)) &&
+        !isOpX<EQ>(e))
       t.push_back(e);
     for (unsigned i = 0; i < e->arity(); i++)
       getSubterms(e->arg(i), t);
+  }
+
+  void getPositiveConsts(Expr e, ExprVector& t)
+  {
+    if (isOpX<MPZ>(e))
+    {
+      auto v = lexical_cast<cpp_int>(e);
+      if (v >= 0)
+        t.push_back(e);
+      else
+        t.push_back(mkMPZ(-v, e->getFactory()));
+    }
+    else for (unsigned i = 0; i < e->arity(); i++)
+      getPositiveConsts(e->arg(i), t);
   }
 
   void getCommonSubterms(Expr e, map<Expr, int>& occs)
   {
     ExprVector t;
     getSubterms(e, t);
+    getPositiveConsts(e, t);
     for (auto & e : t) occs[e]++;
   }
 
@@ -4960,10 +4976,12 @@ namespace ufo
       outs() << string(inden, ' ') << (isOpX<FORALL>(exp) ? "[forall (" : "[exists (");
       int i = 0;
       for (; i < exp->arity() - 1; i++)
-        outs () << fapp(exp->arg(i)) <<
-          (i < exp->arity() - 2 ? " " : "");
-      outs () << ")\n";
-      pprint(exp->arg(i), inden + 2, false);
+      {
+        outs () << fapp(exp->arg(i)) << ": " << exp->arg(i)->last() <<
+          (i < exp->arity() - 2 ? ", " : "");
+      }
+      outs () << ") ";
+      pprint(exp->arg(i), inden, false);
       outs () << "]";
       if (upper) outs() << "\n";
       return;

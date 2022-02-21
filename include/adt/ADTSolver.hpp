@@ -42,8 +42,15 @@ namespace ufo
 
     public:
 
-    ADTSolver(Expr _goal, ExprVector& _assumptions, ExprVector& _constructors, int _glob_ind = 0, int _lev = 0, int _maxDepth = 5, int _maxGrow = 3, int _mergingIts = 3, int _earlySplit = 1, bool _verbose = false, bool _useZ3 = true, unsigned _to = 1000, unsigned _l = 0) :
-        goal(_goal), assumptions(_assumptions), constructors(_constructors), glob_ind(_glob_ind), lev(_lev), efac(_goal->getFactory()), u(_goal->getFactory(), _to), maxDepth(_maxDepth), maxGrow(_maxGrow), mergingIts(_mergingIts), earlySplit(_earlySplit), verbose(_verbose), useZ3(_useZ3), to (_to), nestedLevel(_l)
+    ADTSolver(Expr _goal, ExprVector& _assumptions, ExprVector& _constructors,
+      int _glob_ind = 0, int _lev = 0, int _maxDepth = 5, int _maxGrow = 3,
+      int _mergingIts = 3, int _earlySplit = 1, bool _verbose = false,
+      bool _useZ3 = true, unsigned _to = 1000, unsigned _l = 0) :
+        goal(_goal), assumptions(_assumptions), constructors(_constructors),
+        glob_ind(_glob_ind), lev(_lev), efac(_goal->getFactory()),
+        u(_goal->getFactory(), _to), maxDepth(_maxDepth), maxGrow(_maxGrow),
+        mergingIts(_mergingIts), earlySplit(_earlySplit), verbose(_verbose),
+        useZ3(_useZ3), to (_to), nestedLevel(_l)
     {
       // for convenience, rename assumptions (to have unique quantified variables)
       renameAssumptions();
@@ -992,7 +999,7 @@ namespace ufo
             rewriteSequence.pop_back();
           }
 
-          if (subgoal != exp && lev < 2 /* max meta-induction level, hardcoded for now */)
+          if (subgoal != exp && lev < 1 /* max meta-induction level, hardcoded for now */)
           {
             map<Expr, int> occs;
             getCommonSubterms(exp, occs);   // get common subterms in `exp` to further replace by fresh symbols
@@ -1013,15 +1020,30 @@ namespace ufo
                   continue;
               }
 
-              auto assumptionsTmp = assumptions;
-              // nested induction
-              ADTSolver sol (expGen, assumptionsTmp, constructors, glob_ind, lev+1,
+              auto assumptionsNst = assumptions;
+              for (auto it = assumptionsNst.begin(); it != assumptionsNst.end();)
+                if (!isOpX<FORALL>(*it) ||
+                    emptyIntersect(conjoin(assumptionsNst, efac), expGen))
+                      it = assumptionsNst.erase(it);
+                  else ++it;
+
+              ExprVector vars;
+              filter (expGen, IsConst (), inserter(vars, vars.begin()));
+              for (auto it = vars.begin(); it != vars.end();)
+                if (find(constructors.begin(), constructors.end(), (*it)->left()) == constructors.end()) ++it;
+                  else it = vars.erase(it);
+
+              ADTSolver sol (mkQFla(expGen, vars), assumptionsNst, constructors, glob_ind, lev+1,
                              maxDepth, maxGrow, mergingIts, earlySplit, false, useZ3, to);
 
-              if (sol.solveNoind(false))
+              if (sol.solve())
               {
                 if (verbose) if (exp) outs () << string(sp, ' ')  << "proven by induction: " << *expGen << "\n";
                 return true;
+              }
+              else
+              {
+                if (verbose) if (exp) outs () << string(sp, ' ')  << "nested induction failed\n";
               }
             }
           }
@@ -1037,13 +1059,17 @@ namespace ufo
     Expr generalizeGoal(Expr e, Expr subterm, int occs /* how often `subterm` occurs in `e` */)
     {
       if (occs < 2) return NULL;                          // `subterm` should occur at least twice
-      if (subterm->arity() == 0) return NULL;             // it should not be a constant
+      if (subterm->arity() == 0 && !isOpX<MPZ>(subterm))
+        return NULL;                                      // it should not be a (non-integer) constant
       if (isOpX<FAPP>(subterm) &&
           subterm->left()->arity() == 2) return NULL;     // it should not be a variable
       Expr expGen = e;
       Expr s = bind::mkConst(mkTerm<string> ("_w_" + to_string(glob_ind), efac), typeOf(subterm));
       glob_ind++;                                         // create a fresh symmbol
       expGen = replaceAll(expGen, subterm, s);
+      if (isOpX<MPZ>(subterm))                            // replace negative consts
+        expGen = replaceAll(expGen, mkMPZ(-lexical_cast<cpp_int>(subterm), efac),
+                                    mk<UN_MINUS>(s));;
       if (!emptyIntersect(expGen, subterm)) return NULL;  // there should not be any leftovers after replacement
       int cnt = countFuns(expGen);                        // check the result
       if (cnt == 0 || cnt > 3) return NULL;
@@ -1423,8 +1449,8 @@ namespace ufo
       outs () << string(sp+2, ' ') << string(20, '=') << "\n";
       for (int i = 0; i < assumptions.size(); i++)
       {
-        outs () << string(sp+2, ' ') << "| Assumptions [" << i << "]: "
-                << *assumptions[i] << "\n";
+        outs () << string(sp+2, ' ') << "| Assumptions [" << i << "]: ";
+        pprint(assumptions[i]);
       }
       outs () << string(sp+2, ' ') << string(20, '=') << "\n";
       outs () << string(sp, ' ') << "}\n";
@@ -1801,7 +1827,11 @@ namespace ufo
 
       if (toRollback) goal = rewriteHistory[0];
 
-      if (verbose) outs () << "Simplified goal: " << *goal << "\n\n";
+      if (verbose)
+      {
+        outs () << "Simplified goal: ";
+        pprint(goal);
+      }
 
       for (int i = 0; i < goal->arity() - 1; i++)
       {
