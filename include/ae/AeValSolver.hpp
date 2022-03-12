@@ -11,7 +11,7 @@ namespace ufo
 {
 
   /** engine to solve validity of \forall-\exists formulas and synthesize Skolem relation */
-  
+
   class AeValSolver {
   private:
 
@@ -759,6 +759,9 @@ namespace ufo
 
     ExprSet vars;
     filter (assmTmp, bind::IsConst (), inserter(vars, vars.begin()));
+
+    if (emptyIntersect(assmTmp, goalTmp))
+      return goal;
     Expr tmp = mkNeg(eliminateQuantifiers(mkNeg(mk<IMPL>(assmTmp, goalTmp)), vars));
     tmp = replaceAll(tmp, replsRev);
 

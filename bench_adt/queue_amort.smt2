@@ -25,8 +25,5 @@
 (declare-fun isAmortized (Queue) Bool)
 (assert (forall ((x Lst) (y Lst)) (= (isAmortized (queue x y)) (<= (len y) (len x)))))
 
-;extra lemmas:
-(assert (forall ((x Lst)) (<= 0 (len x))))
-
 (assert (not (forall ((x Lst) (y Lst)) (isAmortized (amortizeQueue x y)))))
 (check-sat)

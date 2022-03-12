@@ -25,6 +25,11 @@ namespace ufo
     ExprFactory &efac;
     SMTUtils u;
 
+    // DS for lemma gen
+    ExprVector baseconstrapps;
+    ExprVector negativeLemmas;
+    ExprVector positiveLemmas;
+
     ExprVector rewriteHistory;
     vector<int> rewriteSequence;
     int maxDepth;
@@ -578,7 +583,7 @@ namespace ufo
             isNumeric(subgoal->left()) && isNumeric(assm->left()))
         {
           Expr tryAbd = abduce(subgoal, assm);
-          if (tryAbd != NULL)
+          if (tryAbd != NULL && tryAbd != subgoal)
           {
             result.push_back(tryAbd);
             return true;
@@ -793,13 +798,10 @@ namespace ufo
         return handleExists(subgoal);
       }
 
-      subgoal = liftITEs(subgoal);
-      subgoal = u.simplifyITE(subgoal);
       subgoal = simplifyExists(subgoal);
       subgoal = simplifyArr(subgoal);
       subgoal = simplifyArithm(subgoal);
       subgoal = simplifyBool(subgoal);
-
 
       ExprSet subgoals;
       if (isOpX<ITE>(subgoal))
@@ -841,7 +843,7 @@ namespace ufo
 
               if (verbose) outs() << string(sp, ' ') << "{\n";
               sp += 2;
-              tmpres= rewriteAssumptions(s);   // recursive call
+              tmpres = rewriteAssumptions(s);   // recursive call
               sp -= 2;
               if (verbose) outs() << string(sp, ' ') << "}\n";
 
@@ -900,10 +902,9 @@ namespace ufo
               return true;
             }
           }
-          for (auto & it : result) {
+          for (auto & it : result)
             if (find (rewriteHistory.begin(), rewriteHistory.end(), it) == rewriteHistory.end())
-            allAttempts[i].push_back(it);
-          }
+              allAttempts[i].push_back(it);
         }
       }
       {
@@ -948,7 +949,6 @@ namespace ufo
       // }
       }
 
-      // first, try easier rewrites
       if (tryRewriting(allAttempts, subgoal))
       {
         if (toRem) assumptions = assumptionsTmp;
@@ -957,28 +957,104 @@ namespace ufo
 
       if (splitDisjAssumptions(subgoal)) return true;
 
-      // second, try harder rewrites
-      if (tryRewriting(allAttempts, subgoal))
-      {
-        if (toRem) assumptions = assumptionsTmp;
-        return true;
-      }
-
       bool res = false;
 
       if (isOpX<OR>(subgoal)) res = splitByGoal(subgoal);
 //      if (!res) res = proveByContradiction(subgoal);
 //      if (!res) res = similarityHeuristic(subgoal);
       if (toRem) assumptions = assumptionsTmp;
+      if (res) return true;
 
+      if (lemmaGen(subgoal)) return true;
+
+      // backtrack:
+      if (verbose) outs () << string(sp, ' ') << "backtrack to: " << *subgoal << "\n";
       return res;
+    }
+
+    bool lemmaGen(Expr subgoal)
+    {
+      if (lev < 1 /* max meta-induction level, hardcoded for now */)
+      {
+        map<Expr, int> occs;
+        getCommonSubterms(subgoal, occs);   // get common subterms in `exp` to further replace by fresh symbols
+        auto it = occs.begin();
+        for (int i = 0; i < occs.size() + 1; i++)
+        {
+          Expr expGen = subgoal;
+          if (it != occs.end()) // try generalizing based on the current subterm from occs
+          {
+            expGen = generalizeGoal(subgoal, it->first, it->second);
+            ++it;
+            if (expGen == NULL) continue;
+          }
+          else
+          {
+            // if nothing worked, try to prove it as is (exactly once, but if not very large)
+            if (getMonotDegree(expGen) > 2 || countFuns(expGen) > 3) //  hand-selected heuristics
+              continue;
+          }
+
+          ExprVector vars;
+          filter (expGen, IsConst (), inserter(vars, vars.begin()));
+          for (auto it = vars.begin(); it != vars.end();)
+            if (find(baseconstrapps.begin(), baseconstrapps.end(), *it) == baseconstrapps.end()) ++it;
+              else it = vars.erase(it);
+
+          bool toCont = false;
+          for (auto & l : negativeLemmas)
+          {
+            ExprMap matching;
+            if (findMatching(expGen, l, vars, matching))
+            {
+              toCont = true;
+              break;
+            }
+          }
+          if (toCont) continue;
+
+          for (auto & l : positiveLemmas)
+          {
+            ExprMap matching;
+            if (findMatching(expGen, l, vars, matching))
+            {
+              toCont = true;
+              break;
+            }
+          }
+
+          if (!toCont)
+          {
+            auto assumptionsNst = assumptions;
+            for (auto it = assumptionsNst.begin(); it != assumptionsNst.end();)
+              if (hasOnlyVars(*it, baseconstrapps)) ++it;
+                else it = assumptionsNst.erase(it);
+
+            ADTSolver sol (mkQFla(expGen, vars), assumptionsNst, constructors, glob_ind, lev + 1,
+                           maxDepth, maxGrow, mergingIts, earlySplit, false, useZ3, to);
+
+            toCont = bool(sol.solve());
+          }
+          if (toCont)
+          {
+            if (verbose) outs () << string(sp, ' ')  << "proven by induction: " << *expGen << "\n";
+            positiveLemmas.push_back(expGen);
+            return true;
+          }
+          else
+          {
+            if (verbose) outs () << string(sp, ' ')  << "nested induction failed\n";
+            negativeLemmas.push_back(expGen);
+          }
+        }
+      }
+      return false;
     }
 
     // try rewriting in a particular order
     bool tryRewriting(map<int, ExprVector>& allAttempts, Expr subgoal)
     {
       for (auto & a : allAttempts) {
-//        outs() << string(sp, ' ') << allAttempts.size() << "\n";
         int i = a.first;
         for (auto & exp : a.second) {
           if (verbose) outs() << string(sp, ' ') << "rewritten [" << i << "]: " << *exp << "\n";
@@ -998,58 +1074,6 @@ namespace ufo
             rewriteHistory.pop_back();
             rewriteSequence.pop_back();
           }
-
-          if (subgoal != exp && lev < 1 /* max meta-induction level, hardcoded for now */)
-          {
-            map<Expr, int> occs;
-            getCommonSubterms(exp, occs);   // get common subterms in `exp` to further replace by fresh symbols
-            auto it = occs.begin();
-            for (int i = 0; i < occs.size() + 1; i++)
-            {
-              Expr expGen = exp;
-              if (it != occs.end()) // try generalizing based on the current subterm from occs
-              {
-                expGen = generalizeGoal(exp, it->first, it->second);
-                ++it;
-                if (expGen == NULL) continue;
-              }
-              else
-              {
-                // if nothing worked, try to prove it as is (exactly once, but if not very large)
-                if (getMonotDegree(expGen) > 2 || countFuns(expGen) > 3) //  hand-selected heuristics
-                  continue;
-              }
-
-              auto assumptionsNst = assumptions;
-              for (auto it = assumptionsNst.begin(); it != assumptionsNst.end();)
-                if (!isOpX<FORALL>(*it) ||
-                    emptyIntersect(conjoin(assumptionsNst, efac), expGen))
-                      it = assumptionsNst.erase(it);
-                  else ++it;
-
-              ExprVector vars;
-              filter (expGen, IsConst (), inserter(vars, vars.begin()));
-              for (auto it = vars.begin(); it != vars.end();)
-                if (find(constructors.begin(), constructors.end(), (*it)->left()) == constructors.end()) ++it;
-                  else it = vars.erase(it);
-
-              ADTSolver sol (mkQFla(expGen, vars), assumptionsNst, constructors, glob_ind, lev+1,
-                             maxDepth, maxGrow, mergingIts, earlySplit, false, useZ3, to);
-
-              if (sol.solve())
-              {
-                if (verbose) if (exp) outs () << string(sp, ' ')  << "proven by induction: " << *expGen << "\n";
-                return true;
-              }
-              else
-              {
-                if (verbose) if (exp) outs () << string(sp, ' ')  << "nested induction failed\n";
-              }
-            }
-          }
-
-          // backtrack:
-          if (verbose) outs () << string(sp, ' ') << "backtrack to: " << *subgoal << "\n";
         }
       }
       return false;
@@ -1058,7 +1082,7 @@ namespace ufo
     // a particular heuristic, to be extended
     Expr generalizeGoal(Expr e, Expr subterm, int occs /* how often `subterm` occurs in `e` */)
     {
-      if (occs < 2) return NULL;                          // `subterm` should occur at least twice
+      if (occs < 1) return NULL;
       if (subterm->arity() == 0 && !isOpX<MPZ>(subterm))
         return NULL;                                      // it should not be a (non-integer) constant
       if (isOpX<FAPP>(subterm) &&
@@ -1094,7 +1118,7 @@ namespace ufo
 
     bool splitByGoal (Expr subgoal)
     {
-      // heuristically pick a split (currently, one one predicate)
+      // heuristically pick a split (currently, one predicate)
       ExprSet dsjs;
       getDisj(subgoal, dsjs);
       if (dsjs.size() < 2) return false;
@@ -1360,6 +1384,7 @@ namespace ufo
                 exit(1);
               }
               baseConstructors[type] = a;
+              baseconstrapps.push_back(fapp(a));
             }
           }
         }
@@ -1485,7 +1510,13 @@ namespace ufo
         baseSubgoal = baseSubgoal->right();
       }
 
-      if (verbose) outs() << "\nBase case:       " << *baseSubgoal << "\n{\n";
+      if (verbose)
+      {
+        outs() << "\nBase case:       ";
+        pprint(baseSubgoal);
+        outs() << "\n{\n";
+      }
+
       tribool baseres = simpleSMTcheck(baseSubgoal);
       if (baseres)
       {
@@ -1596,7 +1627,13 @@ namespace ufo
       eliminateEqualities(indSubgoal);
       if (mergeAssumptions()) return true;
       splitAssumptions();
-      if (verbose) outs() << "Inductive step:  " << * indSubgoal << "\n{\n";
+      if (verbose)
+      {
+        outs() << "\nInductive step:       ";
+        pprint(indSubgoal);
+        outs() << "\n{\n";
+      }
+
       rewriteHistory.clear();
       rewriteSequence.clear();
 
@@ -1808,24 +1845,19 @@ namespace ufo
 
     tribool solve()
     {
-      unfoldGoal();
-      rewriteHistory.push_back(goal);
+      Expr goalPre = goal;
       for (int i = 0; i < 5; i++)
       {
+        unfoldGoal();
         if (simplifyGoal())
         {
           if (verbose) outs () << "Trivially Proved\n";
           return true;
         }
+        if (goalPre == goal) break;
+        goalPre = goal;
       }
-
-      // simple heuristic: if the result of every rewriting made the goal larger, we rollback
-      bool toRollback = true;
-      for (int i = 1; i < rewriteHistory.size(); i++)
-        toRollback = toRollback &&
-            (treeSize(rewriteHistory[i-1]) < treeSize(rewriteHistory[i]));
-
-      if (toRollback) goal = rewriteHistory[0];
+      rewriteHistory.push_back(goal);
 
       if (verbose)
       {
