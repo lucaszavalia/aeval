@@ -18,10 +18,10 @@ namespace ufo
     Expr s;
     Expr t;
     ExprSet v; // existentially quantified vars
-    ExprSet sVars;
-    ExprSet stVars;
+    ExprSet sVars; // all vars (stVars U v)
+    ExprSet stVars; // universally quantified vars
 
-    ExprMap modelInvalid;
+    ExprMap modelInvalid; // key: variable | value: assignment in model
     ExprMap separateSkols;
 
     ExprFactory &efac;
@@ -37,7 +37,7 @@ namespace ufo
     ExprSet sensitiveVars; // for compaction
     set<int> bestIndexes; // for compaction
     map<Expr, ExprVector> skolemConstraints;
-    bool skol;
+    bool skol; // whether or not to produce a skolem (function)
     int debug;
     unsigned fresh_var_ind;
 
@@ -1211,6 +1211,12 @@ namespace ufo
     if(debug >= 3) {
       outs() << "s part: " << s << "\n";
       outs() << "t part: " << t << "\n";
+      outs() << "s vars: [ ";
+      for (auto &v : fa_qvars) outs() << v << " ";
+      outs() << "]\n";
+      outs() << "t vars: [ ";
+      for (auto &v : ex_qvars) outs() << v << " ";
+      outs() << "]\n";
     }
 
     Expr t_orig = t;

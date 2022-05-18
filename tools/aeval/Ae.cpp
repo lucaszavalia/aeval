@@ -69,6 +69,7 @@ void printUsage()
   outs() << "    --opt              optimize quantifier elimination\n";
   outs() << "    --merge            combina Skolem functions into a single ite-formula\n";
   outs() << "    --compact          attempt to make Skolems more compact\n";
+  outs() << "    --debug <lvl>      enable debug logging (higher = more)\n";
 }
 
 int main (int argc, char ** argv)

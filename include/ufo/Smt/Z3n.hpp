@@ -174,12 +174,14 @@ namespace ufo
     z3::context &ctx = z3.get_ctx ();
 
     Z3_ast_vector b = Z3_parse_smtlib2_string (ctx, smt.c_str (), 0, NULL, NULL, 0, NULL, NULL);
+    ctx.check_error ();
     Z3_ast* args = new Z3_ast[Z3_ast_vector_size(ctx, b)];
 
     for (unsigned i = 0; i < Z3_ast_vector_size(ctx, b); ++i) {
       args[i] = Z3_ast_vector_get(ctx, b, i);
     }
 
+    ctx.check_error ();
     z3::ast ast (ctx, Z3_mk_and(ctx, Z3_ast_vector_size(ctx, b), args));
     ctx.check_error ();
     return z3.toExpr (ast);
@@ -191,12 +193,17 @@ namespace ufo
     z3::context &ctx = z3.get_ctx ();
 
     Z3_ast_vector b = Z3_parse_smtlib2_file (ctx, fname, 0, NULL, NULL, 0, NULL, NULL);
-    Z3_ast* args = new Z3_ast[Z3_ast_vector_size(ctx, b)];
+    ctx.check_error ();
+    unsigned astsize = Z3_ast_vector_size(ctx, b);
+    if (astsize == 0)
+      return NULL;
+    Z3_ast* args = new Z3_ast[astsize];
 
-    for (unsigned i = 0; i < Z3_ast_vector_size(ctx, b); ++i) {
+    for (unsigned i = 0; i < astsize; ++i) {
       args[i] = Z3_ast_vector_get(ctx, b, i);
     }
     z3:: ast ast(ctx);
+    ctx.check_error ();
     if(Z3_ast_vector_size(ctx, b) > 1){
       z3::ast ast1 (ctx, Z3_mk_and(ctx, Z3_ast_vector_size(ctx, b), args));
       ast = ast1;

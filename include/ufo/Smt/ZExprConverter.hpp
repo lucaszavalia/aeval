@@ -518,7 +518,6 @@ namespace ufo
       if (bVal == Z3_L_TRUE) return mk<TRUE> (efac);
       if (bVal == Z3_L_FALSE) return mk<FALSE> (efac);
 
-
       Z3_ast_kind kind = z.kind ();
 
 
@@ -794,6 +793,9 @@ namespace ufo
 	  break;
         case Z3_OP_REM:
           e = mknary<REM> (args.begin (), args.end ());
+          break;
+        case Z3_OP_DISTINCT:
+          e = mknary<NEQ> (args.begin(), args.end());
           break;
         case Z3_OP_CONST_ARRAY:
           {
