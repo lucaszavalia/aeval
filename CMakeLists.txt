@@ -129,6 +129,8 @@ else()
   set(GMPXX_LIB "")
 endif()
 
+find_package(BISON 3.2 REQUIRED)
+
 install(DIRECTORY include/
   DESTINATION include
   FILES_MATCHING
@@ -157,13 +159,13 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   add_definitions( -Wno-unused-local-typedefs)
 endif ()
 
-# add the include directory from the build tree
-include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR}/include)
-
 ### add our include directories to the front, overriding directories
 ### specified by external packages.
 include_directories(BEFORE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_CURRENT_BINARY_DIR}/include)
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# add the include directory from the build tree
+include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR}/include)
+
+add_subdirectory(include)
 add_subdirectory(tools)

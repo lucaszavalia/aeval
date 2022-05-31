@@ -1,3 +1,6 @@
 add_executable (aeval Ae.cpp)
 target_link_libraries (aeval ${Z3_LIBRARY} ${Boost_SYSTEM_LIBRARY} ${GMPXX_LIB} ${GMP_LIB})
+#if (BISON_FOUND)
+  add_dependencies(aeval SyGuSParserBison)
+#endif()
 install(TARGETS aeval RUNTIME DESTINATION bin)

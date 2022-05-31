@@ -631,82 +631,82 @@ namespace ufo
       return conjoin(cnjs, efac);
     }
 
-    void print (Expr e)
+    void print (Expr e, ostream& os = std::cout)
     {
       if (isOpX<FORALL>(e) || isOpX<EXISTS>(e))
       {
         if (isOpX<FORALL>(e)) outs () << "(forall (";
-        else outs () << "(exists (";
+        else os << "(exists (";
 
         for (int i = 0; i < e->arity() - 1; i++)
         {
           Expr var = bind::fapp(e->arg(i));
-          outs () << "(" << *var << " " << varType(var) << ")";
-          if (i != e->arity() - 2) outs () << " ";
+          os << "(" << *var << " " << varType(var) << ")";
+          if (i != e->arity() - 2) os << " ";
         }
-        outs () << ") ";
-        print (e->last());
-        outs () << ")";
+        os << ") ";
+        print (e->last(), os);
+        os << ")";
       }
       else if (isOpX<NEG>(e))
       {
-        outs () << "(not ";
-        print(e->left());
-        outs () << ")";
+        os << "(not ";
+        print(e->left(), os);
+        os << ")";
       }
       else if (isOpX<AND>(e))
       {
-        outs () << "(and ";
+        os << "(and ";
         ExprSet cnjs;
         getConj(e, cnjs);
         int i = 0;
         for (auto & c : cnjs)
         {
           i++;
-          print(c);
-          if (i != cnjs.size()) outs () << " ";
+          print(c, os);
+          if (i != cnjs.size()) os << " ";
         }
-        outs () << ")";
+        os << ")";
       }
       else if (isOpX<OR>(e))
       {
-        outs () << "(or ";
+        os << "(or ";
         ExprSet dsjs;
         getDisj(e, dsjs);
         int i = 0;
         for (auto & d : dsjs)
         {
           i++;
-          print(d);
-          if (i != dsjs.size()) outs () << " ";
+          print(d, os);
+          if (i != dsjs.size()) os << " ";
         }
-        outs () << ")";
+        os << ")";
       }
       else if (isOpX<IMPL>(e) || isOp<ComparissonOp>(e))
       {
-        if (isOpX<IMPL>(e)) outs () << "(=> ";
-        if (isOpX<EQ>(e)) outs () << "(= ";
-        if (isOpX<GEQ>(e)) outs () << "(>= ";
-        if (isOpX<LEQ>(e)) outs () << "(<= ";
-        if (isOpX<LT>(e)) outs () << "(< ";
-        if (isOpX<GT>(e)) outs () << "(> ";
-        if (isOpX<NEQ>(e)) outs () << "(distinct ";
-        print(e->left());
-        outs () << " ";
-        print(e->right());
-        outs () << ")";
+        if (isOpX<IMPL>(e)) os << "(=> ";
+        if (isOpX<EQ>(e)) os << "(= ";
+        if (isOpX<GEQ>(e)) os << "(>= ";
+        if (isOpX<LEQ>(e)) os << "(<= ";
+        if (isOpX<LT>(e)) os << "(< ";
+        if (isOpX<GT>(e)) os << "(> ";
+        if (isOpX<NEQ>(e)) os << "(distinct ";
+        print(e->left(), os);
+        os << " ";
+        print(e->right(), os);
+        os << ")";
       }
       else if (isOpX<ITE>(e))
       {
-        outs () << "(ite ";
-        print(e->left());
-        outs () << " ";
-        print(e->right());
-        outs () << " ";
-        print(e->last());
-        outs () << ")";
+        os << "(ite ";
+        print(e->left(), os);
+        os << " ";
+        print(e->right(), os);
+        os << " ";
+        print(e->last(), os);
+        os << ")";
       }
-      else outs () << z3.toSmtLib (e);
+      else os << z3.toSmtLib (e);
     }
 
     void serialize_formula(Expr form)
