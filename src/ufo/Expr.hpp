@@ -2340,12 +2340,12 @@ namespace expr
       }
       inline Expr sortOf (Expr v) {return typeOf (v);}
 
-      Expr mkMPZ(boost::multiprecision::cpp_int a, ExprFactory& efac)
+      static Expr mkMPZ(boost::multiprecision::cpp_int a, ExprFactory& efac)
       {
         return mkTerm (mpz_class (boost::lexical_cast<std::string>(a)), efac);
       }
 
-      Expr mkMPZ(int a, ExprFactory& efac)
+      static Expr mkMPZ(int a, ExprFactory& efac)
       {
         return mkTerm (mpz_class (a), efac);
       }
@@ -2406,6 +2406,16 @@ namespace expr
       
     namespace bind
     {
+      /// returns true if an expression is a number (variable or constant)
+      class IsNumber : public std::unary_function<Expr,bool>
+      {
+      public:
+        bool operator () (Expr e)
+        {
+          return (isOpX<MPZ>(e) || isOpX<MPQ>(e));
+        }
+      };
+
       /// returns true if an expression is int constant
       class IsHardIntConst : public std::unary_function<Expr,bool>
       {
@@ -2437,6 +2447,15 @@ namespace expr
             {
                 return isIntVar(e) || isRealVar(e) || isBoolVar(e);
             }
+      };
+
+      class IsSelect : public std::unary_function<Expr,bool>
+      {
+      public:
+        bool operator () (Expr e)
+        {
+          return isOpX<SELECT> (e);
+        }
       };
     }
   }

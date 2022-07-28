@@ -1,0 +1,1 @@
+add_library(aevalSolver MBPUtils.cpp)

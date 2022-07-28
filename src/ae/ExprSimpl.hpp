@@ -1,6 +1,7 @@
 #ifndef EXPRSIMPL__HPP__
 #define EXPRSIMPL__HPP__
 #include <assert.h>
+#include <boost/rational.hpp>
 
 #include "ufo/Smt/EZ3.hh"
 
@@ -212,7 +213,7 @@ namespace ufo
     return conjoin(comm, efac);
   }
 
-  Expr projectVar(Expr fla, Expr var)
+  static Expr projectVar(Expr fla, Expr var)
   {
     ExprSet cnjs;
     getConj(fla, cnjs);
@@ -263,6 +264,13 @@ namespace ufo
     Expr t = typeOf(a);
     if (t == NULL) return false;
     return isOpX<REAL_TY>(t);
+  }
+
+  inline static bool isInt(Expr a)
+  {
+    Expr t = typeOf(a);
+    if (t == NULL) return false;
+    return isOpX<INT_TY>(t);    
   }
 
   inline static bool isArray(Expr a)
@@ -548,15 +556,29 @@ namespace ufo
     }
 
     // combine results
-
-    cpp_int coef = 0;
+    rational<cpp_int> coef(0, 1);
     for (auto it = lhs.begin(); it != lhs.end(); )
     {
       bool found = false;
       if (*it == var) { coef++; found = true; }
-      if (isOpX<UN_MINUS>(*it) && (*it)->left() == var) { coef--; found = true; }
+      if (isOpX<UN_MINUS>(*it)) {
+        Expr subExpr = (*it)->left();
+        if(subExpr == var) { coef--; found = true; }
+        else if (isOpX<MULT>(subExpr) && 2 == subExpr->arity() && isOpX<MPZ>(subExpr->left()) && subExpr->right() == var) {
+          coef -= lexical_cast<cpp_int>(subExpr->left());
+          found = true;
+        }
+        else if (isOp<IDIV>(subExpr) && 2 == subExpr->arity() && isOpX<MPZ>(subExpr->right()) && subExpr->left() == var) {
+          coef -= rational<cpp_int>(1, lexical_cast<cpp_int>(subExpr->right()));
+          found = true;
+        } 
+      }
       if (isOpX<MULT>(*it) && 2 == (*it)->arity() && isOpX<MPZ>((*it)->left()) && (*it)->right() == var) {
         coef += lexical_cast<cpp_int>((*it)->left());
+        found = true;
+      }
+      if (isOp<IDIV>(*it) && 2 == (*it)->arity() && isOpX<MPZ>((*it)->right()) && (*it)->left() == var) {
+        coef += rational<cpp_int>(1, lexical_cast<cpp_int>((*it)->right()));
         found = true;
       }
 
@@ -566,19 +588,29 @@ namespace ufo
 
     if (!lhs.empty())
     {
-//      errs() << "WARNING: COULD NOT NORMALIZE w.r.t. " << *var << ": "
-//             << *conjoin (lhs, e->getFactory()) << "\n";
+      errs() << "WARNING: COULD NOT NORMALIZE w.r.t. " << *var << ": "
+             << *conjoin (lhs, e->getFactory()) << "\n";
       return e;
     }
 
     r = mkplus(rhs, e->getFactory());
-
+  
     if (coef == 0){
       l = mkMPZ (0, e->getFactory());
     } else if (coef == 1){
       l = var;
+    } else if (coef == -1){
+      l = mk<UN_MINUS>(var);
+    } else if (coef < 0) {
+      coef = -coef;
+      l = mk<MULT>(mkMPZ(numerator(coef), e->getFactory()), var);
+      if (denominator(coef) != 1)
+        l = mk<IDIV>(l, mkMPZ(denominator(coef), e->getFactory()));
+      l = mk<UN_MINUS>(l);
     } else {
-      l = mk<MULT>(mkMPZ(coef, e->getFactory()), var);
+      l = mk<MULT>(mkMPZ(numerator(coef), e->getFactory()), var);
+      if (denominator(coef) != 1)
+        l = mk<IDIV>(l, mkMPZ(denominator(coef), e->getFactory()));      
     }
 
     return mk<T>(l,r);
@@ -1797,7 +1829,7 @@ namespace ufo
     return weakenForVars(fla, qVars);
   }
 
-  void getExtraVars(Expr fla, ExprVector& vars, ExprSet& allVars)
+  static void getExtraVars(Expr fla, ExprVector& vars, ExprSet& allVars)
   {
     filter (fla, bind::IsConst (), inserter (allVars, allVars.begin()));
     minusSets(allVars, vars);
@@ -1806,7 +1838,7 @@ namespace ufo
     for (auto & q : qv) minusSets(allVars, q.second);
   }
 
-  bool hasOnlyVars(Expr fla, ExprVector& vars)
+  static bool hasOnlyVars(Expr fla, ExprVector& vars)
   {
     ExprSet allVars;
     getExtraVars(fla, vars, allVars);
@@ -2068,7 +2100,7 @@ namespace ufo
     return c.size();
   }
 
-  Expr projectITE(Expr ite, Expr var)
+  static Expr projectITE(Expr ite, Expr var)
   {
     if (isOpX<ITE>(ite))
     {
@@ -2873,7 +2905,6 @@ namespace ufo
       for (auto & d : dsjsSet) newDsjs.insert(simpleQE(d, quantified));
       return disjoin(newDsjs, efac);
     }
-
     getConj(exp, cnjsSet);
     ExprVector cnjs;
     ineqMerger(cnjsSet, true);
@@ -2881,7 +2912,7 @@ namespace ufo
     for (auto & var : quantified)
     {
       ExprSet eqs;
-      ExprSet stores;
+      ExprSet stores; // todo: extend to ExprSet
 
       for (unsigned it = 0; it < cnjs.size(); )
       {
@@ -2929,8 +2960,7 @@ namespace ufo
           normalized = mk<EQ>(normalized->right(), normalized->left());
           stores.insert(normalized);
         }
-        else
-          { it++; continue;}
+        else { it++; continue;}
 
 //        errs() << "WARNING: COULD NOT NORMALIZE w.r.t. " << *var << ": "
 //               << *normalized << "     [[  " << *cnj << "  ]]\n";
@@ -3002,27 +3032,6 @@ namespace ufo
     }
 
     return conjoin(cnjs, exp->getFactory());
-  }
-
-  struct QESubexpr
-  {
-    ExprVector& quantified;
-    QESubexpr (ExprVector& _quantified): quantified(_quantified) {};
-
-    Expr operator() (Expr exp)
-    {
-      if (isOpX<AND>(exp) && !containsOp<OR>(exp))
-      {
-        return simpleQE(exp, quantified);
-      }
-      return exp;
-    }
-  };
-
-  inline static Expr simpleQERecurs(Expr exp, ExprVector& quantified)
-  {
-    RW<QESubexpr> a(new QESubexpr(quantified));
-    return dagVisit (a, exp);
   }
 
   inline static Expr rewriteNegAnd(Expr exp)
@@ -3772,7 +3781,7 @@ namespace ufo
     return isOpX<EQ>(exp);
   }
 
-  Expr processNestedStores (Expr exp, ExprSet& cnjs)
+  static Expr processNestedStores (Expr exp, ExprSet& cnjs)
   {
     // TODO: double check if cells are overwritten
     Expr arrVar = exp->left();
@@ -4192,7 +4201,7 @@ namespace ufo
     return conjoin(cnjs, exp->getFactory());
   }
 
-  bool isNonlinear(Expr e) {
+  static bool isNonlinear(Expr e) {
     int arity = e->arity();
     if (isOpX<MOD>(e) || isOpX<DIV>(e) || isOpX<IDIV>(e)) {
       ExprVector av;
@@ -4542,14 +4551,14 @@ namespace ufo
     if (toRepeat) simplifyPropagate(cnj);
   }
 
-  bool isBoolConstOrNegation(Expr b)
+  static bool isBoolConstOrNegation(Expr b)
   {
     if (isBoolConst(b)) return true;
     if (isOpX<NEG>(b)) return isBoolConstOrNegation(b->left());
     return false;
   }
 
-  void getLiterals (Expr exp, ExprSet& lits, bool splitEqs = true)
+  static void getLiterals (Expr exp, ExprSet& lits, bool splitEqs = true)
   {
     ExprFactory& efac = exp->getFactory();
     Expr el = exp->left();

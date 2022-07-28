@@ -5,6 +5,11 @@
 #include "ae/ExprSimpl.hpp"
 #include "ufo/Smt/EZ3.hh"
 
+#define tribool_assert(trbool)                     \
+  if(boost::indeterminate(trbool))                 \
+    errs() << "Solver retutned undefined" << endl; \
+  assert(bool(trbool))
+
 using namespace std;
 using namespace boost;
 namespace ufo
@@ -716,7 +721,7 @@ namespace ufo
       smt.toSmtLib (outs());
       outs().flush ();
     }
-  
+
     template <typename T> void serialize_formula(T& forms)
     {
       smt.reset();

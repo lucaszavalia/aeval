@@ -131,8 +131,8 @@ endif()
 
 find_package(BISON 3.2 REQUIRED)
 
-install(DIRECTORY include/
-  DESTINATION include
+install(DIRECTORY src/
+  DESTINATION src
   FILES_MATCHING
   PATTERN "*.hpp"
   PATTERN "*.hh"
@@ -140,8 +140,8 @@ install(DIRECTORY include/
   PATTERN ".svn" EXCLUDE
   )
 
-install(DIRECTORY ${CMAKE_BINARY_DIR}/include/
-  DESTINATION include
+install(DIRECTORY ${CMAKE_BINARY_DIR}/src/
+  DESTINATION src
   FILES_MATCHING
   PATTERN "*.hpp"
   PATTERN "*.hh"
@@ -162,10 +162,10 @@ endif ()
 ### add our include directories to the front, overriding directories
 ### specified by external packages.
 include_directories(BEFORE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # add the include directory from the build tree
-include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR}/include)
+include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR}/src)
 
-add_subdirectory(include)
+add_subdirectory(src)
 add_subdirectory(tools)
