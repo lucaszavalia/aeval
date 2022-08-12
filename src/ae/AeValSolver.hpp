@@ -5,6 +5,7 @@
 #include "ae/SMTUtils.hpp"
 #include "ufo/Smt/EZ3.hh"
 #include "ae/MBPUtils.hpp"
+#include "ae/SetHash.hpp"
 
 using namespace std;
 using namespace boost;
@@ -37,6 +38,7 @@ namespace ufo
     vector<ExprMap> someEvals;
     ExprSet sensitiveVars; // for compaction
     set<int> bestIndexes; // for compaction
+    unordered_set<set<int>> doneIndexes; // for compaction
     map<Expr, ExprVector> skolemConstraints;
     bool skol; // whether or not to produce a skolem (function)
     int debug;
@@ -960,6 +962,8 @@ namespace ufo
             {
               set<int> indexes2 = indexes;
               indexes2.erase(j);
+              if (!doneIndexes.insert(indexes2).second)
+                return;
               searchDownwards(indexes2, var, skol);
             }
           }
@@ -1069,6 +1073,7 @@ namespace ufo
       ExprSet skolUncond;
       ExprSet eligibleVars;
       skolemConstraints.clear(); // GF: just in case
+      doneIndexes.clear();
 
       // GF: to clean further
       for (auto &var: v)
