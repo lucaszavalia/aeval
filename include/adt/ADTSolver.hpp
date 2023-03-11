@@ -2,6 +2,7 @@
 #define ADTSOLVER__HPP__
 #include <assert.h>
 #include <string.h>
+#include <fstream>
 
 #include "ae/AeValSolver.hpp"
 #include "ae/SMTUtils.hpp"
@@ -30,6 +31,15 @@ namespace ufo
     ExprVector negativeLemmas;
     ExprVector positiveLemmas;
 
+    //DS for disproof
+    ExprSet compositeConstructors;
+    int var_counter = 0;
+    ExprSet types;
+    ExprVector naturalNumbers;
+    bool isNestedType = false;
+    ExprVector blockedTypes; //mark for delete
+    Expr templateFdecl; //mark for delete
+
     ExprVector rewriteHistory;
     vector<int> rewriteSequence;
     int maxDepth;
@@ -42,6 +52,7 @@ namespace ufo
     int lev = 0;
     bool useZ3 = false;
     unsigned to;
+    int disproofDepth = 0;
     ExprVector blockedAssms;
     int nestedLevel;
 
@@ -49,17 +60,72 @@ namespace ufo
 
     ADTSolver(Expr _goal, ExprVector& _assumptions, ExprVector& _constructors,
       int _glob_ind = 0, int _lev = 0, int _maxDepth = 5, int _maxGrow = 3,
-      int _mergingIts = 3, int _earlySplit = 1, bool _verbose = false,
-      bool _useZ3 = true, unsigned _to = 1000, unsigned _l = 0) :
+      int _mergingIts = 3, int _earlySplit = 1, bool _verbose = true,
+      bool _useZ3 = true, unsigned _to = 1000, int _disproofDepth = 0, unsigned _l = 0) :
         goal(_goal), assumptions(_assumptions), constructors(_constructors),
         glob_ind(_glob_ind), lev(_lev), efac(_goal->getFactory()),
         u(_goal->getFactory(), _to), maxDepth(_maxDepth), maxGrow(_maxGrow),
         mergingIts(_mergingIts), earlySplit(_earlySplit), verbose(_verbose),
-        useZ3(_useZ3), to (_to), nestedLevel(_l)
+        useZ3(_useZ3), to (_to), disproofDepth(_disproofDepth), nestedLevel(_l)
     {
       // for convenience, rename assumptions (to have unique quantified variables)
       renameAssumptions();
     }
+
+/*    void dumpToFile(Expr newGoal, ExprVector newAssms) {
+       ofstream outputFile;
+       outputFile.open("output.smt2", ofstream::out | ofstream::app);
+       static bool didtypes = false;
+       if (!didtypes) {
+          serializeTypes(outputFile);
+	  didtypes = true;
+       }
+       //for (auto & it : newAssms) {u.serialize_to_stream(it, outputFile);}
+       u.serialize_to_stream(newGoal, outputFile);
+       outputFile.close();
+    }
+
+    void serializeTypes(ostream & out = outs()) {
+       //step 1, collect adt types and constructors
+       map<Expr, ExprVector> newConstructors; //should have form <type, constructors>
+       ExprVector typeVect;
+       typeVect.resize(constructors.size());
+       transform(constructors.begin(), constructors.end(), typeVect.begin(), [](Expr x){ return x->last(); });
+       unique(typeVect.begin(), typeVect.end());
+       for (auto & it : typeVect) {
+          ExprVector tempCons;
+	  tempCons.resize(constructors.size());
+	  copy_if(constructors.begin(), constructors.end(), tempCons.begin(), [it](Expr x){return (x->last() == it);});
+	  newConstructors.emplace(it, tempCons);
+       }
+       //step 2, iterate over newConstructors map and print info
+       for (auto it : newConstructors) {
+          out << "(declare-datatypes ";
+	  out << "((" << it.first->arg(0); 
+          out << " 0)) ";
+	  out << "((";
+	  for (auto is : it.second) {
+	     out << "(" << is->arg(0);
+	     if (is->arity() > 2) {out << " ";}
+             for (int i = 1; i < is->arity() - 1; i++) {
+                auto temp = is->arg(i);
+		if (isOpX<AD_TY>(temp)) {
+                   out <<  " (param" << i << " ";
+		   out << temp->arg(0);
+		   out << ")";
+		}
+		else {
+                   out << "(param" << i << " ";
+		   u.print(temp, out);
+		   out << ")";
+		}
+	     }
+	     out << ")";
+	  }
+	  out << "))";
+	  out << ")\n";
+       }
+    }*/
 
     void renameAssumptions()
     {
@@ -1029,12 +1095,23 @@ namespace ufo
             for (auto it = assumptionsNst.begin(); it != assumptionsNst.end();)
               if (hasOnlyVars(*it, baseconstrapps)) ++it;
                 else it = assumptionsNst.erase(it);
+	    
+	    //try to disprove lemma
+	    int tempDepth = disproofDepth;
+	    disproofDepth = 2;
+            auto newExp = mkQFla(expGen, vars);
+	    if (bool(disproof(newExp))) {
+                disproofDepth = tempDepth;
+		outs() << string(sp, ' ') << "Unknown\n";
+		continue;
+	    }
+	    disproofDepth = tempDepth;
 
-            ADTSolver sol (mkQFla(expGen, vars), assumptionsNst, constructors, glob_ind, lev + 1,
-                           maxDepth, maxGrow, mergingIts, earlySplit, false, useZ3, to);
-
+	    //auto newExp = mkQFla(expGen, vars);
+            ADTSolver sol (newExp, assumptionsNst, constructors, glob_ind, lev + 1,
+                           maxDepth, maxGrow, mergingIts, earlySplit, false, useZ3, to, disproofDepth);
             toCont = bool(sol.solve());
-          }
+	  }
           if (toCont)
           {
             if (verbose) outs () << string(sp, ' ')  << "proven by induction: " << *expGen << "\n";
@@ -1046,6 +1123,11 @@ namespace ufo
             if (verbose) outs () << string(sp, ' ')  << "nested induction failed\n";
             negativeLemmas.push_back(expGen);
           }
+	  /*auto newExp = mkQFla(expGen, vars);
+	  if (bool(disproof(newExp))) {
+             outs() << "Unknown\n";
+	     exit(1);
+	  }*/
         }
       }
       return false;
@@ -1100,6 +1182,713 @@ namespace ufo
       if (getMonotDegree(expGen) > 2) return NULL;        // if it is still "too complex", scratch it
       return expGen;
     }
+
+    //test this function with more rigor before rerunning experiments
+    bool disproofFilter2(Expr & exp) {
+       //outs() << "expression head is: " << exp->arg(0) << '\n';
+       if (!isOpX<FAPP>(exp)) {
+	  ExprSet fdecls;
+	  //outs() << "PING\n";
+          filter(exp, [](Expr & x){return (isOpX<FDECL>(x) && x->arity() > 2);}, inserter(fdecls, fdecls.begin()));
+	  //collect all non-variable fdecls in exp
+	  //outs() << "fdecls are: ";
+	  //for (auto & it : fdecls) {outs() << it << ' ';}
+	  //outs() << '\n';
+	  //if there are no fdecls, send to z3 (might be arithmetic term)
+	  if (fdecls.empty()) {return true;}
+	  //test if each fdecl is in constructors 
+	  bool isSubset = true;
+	  for (auto & it : fdecls) {
+             if (find(constructors.begin(), constructors.end(), it) == constructors.end()) {isSubset = false;}
+	  }
+	  return isSubset;
+       }
+       outs() << string(sp, ' ') << "filter failed\n";
+       return false;
+    }
+
+    tribool disproof(Expr exp) {
+       outs() << string(sp, ' ') << "Attempting to disprove: " << exp << '\n';
+       outs() << string(sp, ' ') << "Disproof depth is set to: " << disproofDepth << '\n';
+       outs() << string(sp, ' ') << "{\n";
+       ExprVector vars;
+       Expr newExpr;
+       //compute types set and natural number vector, used for handling nested adts
+       for (auto & it : constructors) {
+          types.insert(it->last());
+       }
+       naturalNumbers = getNaturalNumbers();
+       //remove quantifier
+       if (isOpX<FORALL>(exp) || isOpX<EXISTS>(exp)) {newExpr = exp->last();}
+       else {newExpr = exp;}
+       //collect finalTerms
+       ExprSet finalTerms = generateTerms(newExpr, disproofDepth);
+       //get template for nested ADT handler
+       Expr candidate_fdecl;
+       if (!finalTerms.empty()) {
+          auto tempIter = *(finalTerms.begin()++);
+	  candidate_fdecl = templateFdecl;
+	  //outs() << "Candidate fdecl is " << candidate_fdecl << '\n';
+       }
+       outs() << string(sp + 2, ' ') << "generated " << finalTerms.size() << " terms {\n";
+       for (auto & it : finalTerms){outs() << string(sp + 4, ' ') << it << "\n";}
+       outs() << string(sp + 2, ' ') << "}\n";
+       outs() << string(sp + 2, ' ') << "unfolding terms\n";
+       int counter = 0;
+       int breaker = 0;
+       for (auto it = finalTerms.begin(); it != finalTerms.end(); it++) {
+          Expr temp = *it;
+          Expr old = temp;
+          while (true) { // this portion will need to be a recursive function (for completeness, not as important)
+             ExprVector results;
+             for (auto is = assumptions.begin(); is != assumptions.end(); is++) {
+                //locate specific function definitions
+                //when reading file, extract definitions
+                //pattern match for two assumptions, one will have base cons the other will be ind
+                //
+                useAssumption(temp, *is, results);
+                if (!results.empty()) {
+                   temp = results[0];
+                }
+             }
+	     //make a filter to keep nonsense from going to z3 (more important)
+             if (old == temp) {break;}
+             else {old = temp;}
+             //if (isOpX<TRUE>(temp)) break;
+          }
+          outs() << string(sp + 2, ' ') << "unfolded term: " << temp << '\n';
+	  if (isOpX<TRUE>(temp)){continue;}
+	  Expr trans;
+	  auto syn_res = syntaxTransformation1(temp, trans);
+	  bool isSame = false;
+	  bool resNested = false;
+	  if (syn_res) {
+             if (temp == trans) {isSame = true;}
+             temp = trans;
+	  }
+	  else {
+             outs() << string(sp + 2, ' ') << "Syntactic check failed for " << temp << '\n';
+	     return true;
+	  }
+	  if (isNestedType) {
+             Expr newTemp = syntaxTransformation2(temp);
+	     if (newTemp == NULL) {
+                outs() << string(sp + 2, ' ') << "Syntactic check failed for " << temp << '\n';
+		return true;
+	     }
+	     temp = newTemp;
+	     resNested = true;
+	  }
+	  //Expr throwAway = nestedADTHandler(temp, candidate_fdecl);
+	  //outs() << "Unfolded nest ADT is: " << throwAway << '\n';
+	  //temp = throwAway;
+	  //
+	  //dumpToFile(constructors, assumptions, temp, true);
+          //outs() << "    counter: " << counter << '\n';
+          counter++;
+	  outs() << string(sp + 2, ' ') << "transformed term: " << temp << '\n';
+	  if (!disproofFilter2(temp)) {
+	     outs() << string(sp + 2, ' ') << "unfolding failed at term " << temp << '\n';
+             continue;
+	  }
+          //temp = mk<IMPL>(temp, mk<TRUE>(efac));          
+	  auto ttt = u.isSat(temp);
+	  Expr model;
+	  if ((ttt == true && isSame != true) || (ttt != true && isSame == true) || (ttt != true && resNested == true))
+	  {
+	     outs() << string(sp + 2, ' ') << "Last term is " << temp << '\n';
+             model = u.getModel();
+	     //if (isOpX<TRUE>(model)) {continue;}
+	     // TODO: report disproof
+             outs() << string(sp + 2, ' ') << "Disproven with Z3.\n";
+	     outs() << string(sp + 2, ' ') << "Counterexample: " << model << '\n';
+             outs() << string(sp, ' ') << "}\n";
+             return true;
+          }
+          if (counter == 20 || counter == finalTerms.size() - 1) {
+            outs() << string(sp + 2, ' ') << "Tested maximum number of terms\n";
+            outs() << string(sp, ' ') << "}\n";
+            return indeterminate;
+          };
+       }
+       outs() << string(sp + 2, ' ') << "Disproof failed.\n";
+       outs() << string(sp, ' ') << "}\n";
+       //experiment here with useAssumption, run on an infinite loop that replaces each rev2 instance one at a time
+       return indeterminate;
+    }
+
+    ExprSet generateTerms(Expr exp, int length) {
+       ExprSet startSet;
+       ExprSet results;
+       startSet.insert(exp);
+       //collect variables and remove constants
+       ExprVector vars;
+       filter(exp, bind::IsConst(), inserter(vars, vars.begin()));
+       Expr base =  mk<FAPP>(*find_if(constructors.begin(), constructors.end(), [](Expr x){return x->arity() == 2;}));
+       for (auto it = vars.begin(); it != vars.end(); ) {
+         if (*it == base) {vars.erase(it);}
+         else it++;
+       }
+       //call unwrapped function
+       generateTermsUnwrapped(exp, startSet, vars, length, results);
+       return results;
+    }
+
+    void generateTermsUnwrapped(Expr exp, ExprSet start, ExprVector vars, int length, ExprSet & result) {
+       if (vars.empty()) {
+         result = start;
+         return;
+       }
+       ExprSet newSet;
+       Expr curVar = vars.back();
+       vars.pop_back();
+
+       Expr old = mk<TRUE>(efac);
+       ExprSet newTerms = processTerms(exp, length);
+       auto curVarType = curVar->last()->last();
+       for (auto it = start.begin(); it != start.end(); it++) {
+          for (auto is = newTerms.begin(); is != newTerms.end(); is++) {
+             if (curVarType == getADTType(*is)) {		
+		auto new_term = *is;
+		bool res = testIsomorphism(old, new_term);
+		bool normal = false;
+		if (!normal) {
+                   if (!res) {
+		      Expr temp = replaceAll(*it, curVar, *is);
+                      newSet.insert(temp);
+		   }
+		}
+		else {
+                   Expr temp = replaceAll(*it, curVar, *is);
+		   newSet.insert(temp);
+		}
+/*
+		outs() << string(sp+4, ' ') << "Current term: " << temp << '\n';
+		outs() << string(sp+4, ' ') << "Substitution: " << *is << '\n';
+		outs() << string(sp+4, ' ') << "Old data is : " << old << '\n';
+		outs() << string(sp+4, ' ') << "Result is   : " << res << '\n';*/
+             }
+	     old = * is;
+          }
+       }
+       generateTermsUnwrapped(exp, newSet, vars, length, result);
+    }
+
+    ExprSet processTerms(Expr exp, int length) {
+       ExprSet result;
+       ExprSet startSet;
+       ExprSet generatedTerms;
+       for (auto & it : constructors) {
+          if (it->arity() > 2) {
+             auto base = mk<FAPP>(*find_if(constructors.begin(), constructors.end(), [it](Expr x){return (x->arity() == 2 && x->last() == it->last());}));
+             ExprSet tempSet;
+	     ExprSet finalSet;
+             tempSet.insert(base);
+	     ExprSet vars;
+             generateADTs(it, tempSet, vars, length);
+             for (auto & js : tempSet) {
+		Expr tempExpr = js;
+		//var_counter = 0;
+                for (auto & jt : vars) {
+                   bool stopCondition = true;
+		   while (stopCondition) {
+                      Expr type = jt->last()->last();
+		      //outs() << "variable type is: " << type << '\n';
+		      Expr newVar = spawnVar(type);
+		      //outs() << "Before replace one\n";
+		      auto resRep = replaceOne(tempExpr, jt, newVar);
+		      tempExpr = resRep.first;
+		      stopCondition = resRep.second;
+		      //outs() << "In while loop, expr is " << tempExpr << '\n';
+		   }
+		   //outs() << "Exiting while loop\n";
+		}
+		generatedTerms.insert(tempExpr);
+	     }
+	     //outs() << "Before copy\n";
+             //generatedTerms.insert(finalSet.begin(), finalSet.end());
+	     //outs() << "After copy\n";
+          }
+       }
+       //for (auto it = generatedTerms.begin(); it != generatedTerms.end(); it++) {outs() << "  generated list: " << *it << '\n';}
+       //generateTermsMemoize(startSet, vars, generatedTerms, result);
+       return generatedTerms;
+    }
+
+    void generateADTs(Expr templateExp, ExprSet & newTerms, ExprSet & vars, int depth) {
+       //templateExp should be FDECL of ind cons
+       //newTerms should only contain FAPP of base cons
+       //outs() << "DEPTH IS: " << depth << "\n";
+       if (depth == 0) {
+	  templateFdecl = templateExp;
+          return;
+       }
+       //is not a composite ADT
+       /*getComposites();
+       if (!compositeConstructors.empty()) {
+          auto pos = compositeConstructors.find(templateExp);
+	  if (pos != compositeConstructors.end()) {return;}
+       }*/
+       //var_counter = 0;
+       ExprVector fappArgs;
+       fappArgs.push_back(templateExp);
+       vector<ExprVector> memo;
+       memo.push_back(fappArgs);
+       vector<ExprVector> newMemo;
+       if (vars.empty()) {
+          for (int i = 1; i < templateExp->arity()-1; i++) {
+             if (templateExp->arg(i) != templateExp->last()) {
+                Expr var = bind::mkConst(mkTerm<string>("_o_" + to_string(i), efac), templateExp->arg(i));
+		vars.insert(var);
+	     }
+	  }
+       }
+       auto iter = vars.begin();
+       for (int i = 1; i < templateExp->arity()-1; i++) {
+          for (auto & it : memo) {
+             //current arg has recursive ADT type
+             if (templateExp->arg(i) == templateExp->last()) {
+                for (auto & is : newTerms) {
+                   ExprVector temp(it.begin(), it.end());
+		   //outs() << "is in case 1 is: " << is << '\n';
+		   //outs() << "it in case 1 is: " << mknary<FAPP>(temp) << '\n';
+                   temp.push_back(is);
+                   newMemo.push_back(temp);
+                   //outs() << "RESULT OF CASE 1: " << mknary<FAPP>(temp) << "\n";
+                }
+             }
+             //current arg has other ADT type
+	     else if (find(types.begin(), types.end(), templateExp->arg(i)) != types.end()) {
+		isNestedType = true;
+		Expr type = templateExp->arg(i);
+		//outs() << "Nested type " << type << endl;
+                ExprSet newStartSet;
+		ExprSet newVars;
+		Expr newBase = mk<FAPP>(*find_if(constructors.begin(), constructors.end(), [type](Expr x){return (x->arity() == 2 && x->last() == type);}));
+		//outs() << "New base is " << newBase << endl;
+                Expr newTemplate = *find_if(constructors.begin(), constructors.end(), [type](Expr x){return (x->arity() > 2 && x->last() == type);});
+		//outs() << "New template is " << newTemplate << endl;
+		newStartSet.insert(newBase);
+		generateADTs(newTemplate, newStartSet, newVars, disproofDepth);
+		for (auto & nss : newStartSet) {
+		   Expr tempExpr = nss;
+                   //outs() << "Nested term is " << nss << endl;
+		   ExprVector temp(it.begin(), it.end());
+                   for (auto & jt : newVars) {
+                      bool stopCondition = true;
+		      while (stopCondition) {
+                         Expr type = jt->last()->last();
+		         //outs() << "variable type is: " << type << '\n';
+		         Expr newVar = spawnVar(type);
+		         //outs() << "Before replace one\n";
+		         auto resRep = replaceOne(tempExpr, jt, newVar);
+		         tempExpr = resRep.first;
+		         stopCondition = resRep.second;
+		         //outs() << "In while loop, expr is " << tempExpr << '\n';
+		      }
+		      //outs() << "Exiting while loop\n";
+		   }
+		   temp.push_back(tempExpr);
+		   newMemo.push_back(temp);
+		}
+	        	
+	     }
+	     //otherwise
+             else {
+		outs() << "type is: " << templateExp->arg(i) << '\n';
+                ExprVector temp(it.begin(), it.end());
+		Expr var = *iter;
+		if (iter == vars.end()) {iter = vars.begin();}
+		else {iter++;}
+                temp.push_back(var);
+                newMemo.push_back(temp);
+                //outs() << "RESULT OF CASE 2: " << mknary<FAPP>(temp) << "\n";
+             }
+          }
+          memo.assign(newMemo.begin(), newMemo.end());
+          newMemo.clear();
+       }
+       //turn each element of memo to FAPP
+       for (auto & it : memo) {
+          Expr temp = mknary<FAPP>(it);
+	  /*for (auto & jt : vars) { //code for making unique variables
+             bool stopCondition = true;
+	     outs() << "Before the loop\n";
+	     while (stopCondition) {
+		Expr newVar = spawnVar(jt->last()->last());
+                auto res = replaceOne(temp, jt, newVar);
+		temp = res.first;
+		stopCondition = res.second;
+	     }
+	     outs() << "After the loop\n";
+	  }*/
+
+	  //outs() << "new term in generateADTs is " << temp << '\n';
+          newTerms.insert(temp);
+       }
+       generateADTs(templateExp, newTerms, vars, depth-1);
+
+    }
+
+    Expr nestedADTHandler(const Expr & e, const Expr & templateExp) { //mark for delete
+       bool isNested = false;
+       Expr type;
+       //outs() << "e is: " << e << '\n';
+       //outs() << "templateExp is: " << templateExp << '\n';
+       for (auto & it : constructors) {
+          for (int i = 1; i < templateExp->arity()-1; i++) {
+	     //outs() << "Current it is " << it << '\n';
+	     //outs() << "Current arg is " << templateExp->arg(i) << '\n';
+	     if (it->arity() <= 2) {continue;}
+             if (templateExp->arg(i) == it->last() && templateExp->arg(i) != templateExp->last()) {
+		//if (find_if(blockedTypes.begin(), blockedTypes.end(), [it](Expr x){return x == it->first;}) != blockedTypes.end()) {continue;}
+                isNested = true;
+		type = it;
+		outs() << "Nested fdecl is: " << type << '\n';
+		blockedTypes.push_back(type);
+		outs() << "The adt is nested\n";
+		break;
+	     }
+	  }
+       }
+       if (!isNested) {outs() << "The adt is NOT nested\n"; return nullptr;}
+       ExprVector vars;
+       ExprSet tempVars;
+       filter(e, bind::IsConst(), inserter(vars, vars.begin()));
+       ExprSet generatedTerms;
+       auto base = mk<FAPP>(*find_if(constructors.begin(), constructors.end(), [type](Expr x){return (x->arity() == 2 && x->last() == type->last());}));
+       generatedTerms.insert(base);
+       Expr saveTemplate = templateFdecl;
+       generateADTs(type, generatedTerms, tempVars, 3);
+       if (generatedTerms.empty()) {outs() << "No terms generated\n";}
+       templateFdecl = saveTemplate;
+       ExprVector termCollection;
+       for (auto & v : vars) {
+          for (auto & term : generatedTerms) {
+             outs() << "generate term is: " << term << '\n';
+	     Expr eq = mk<EQ>(v, term);
+	     outs() << "construction step 1 is: " << eq << '\n';
+	     termCollection.push_back(eq);
+          }
+       }
+       Expr disjunction = disjoin(termCollection, efac);
+       outs() << "construction step 2 is: " << disjunction << '\n';
+       return mk<AND>(e, disjunction);
+    }
+
+    pair<Expr,bool> replaceOne(const Expr& e, const Expr& from, const Expr& to) {
+      ExprVector args;
+      if (e == from) {return make_pair(to, true);}
+      if (e->arity() == 0) {return make_pair(e, false);}
+
+      bool didrepl = false;
+      for (int i = 0; i < e->arity(); i++) {
+        if (!didrepl) {
+          auto ret = replaceOne(e->arg(i), from, to);
+          if (ret.second) {didrepl = true;}
+          args.push_back(ret.first);
+        }
+        else {args.push_back(e->arg(i));}
+      }
+      return make_pair(mknary(e->op(), args.begin(), args.end()), didrepl);
+    }
+
+    Expr spawnVar(const Expr& type) {
+       Expr var = bind::mkConst(mkTerm<string>("_t_" + to_string(var_counter), efac), type);
+       var_counter++;
+       return var;
+    }
+
+    Expr getADTType(Expr exp) {
+       Expr temp = exp; //exp should be FAPP of constructor
+       while (temp != NULL) {
+          temp = temp->last();
+	  if (temp == NULL) {return NULL;}
+          if (isOpX<FDECL>(temp)) {
+	     return temp->last();
+          }
+       }
+       return NULL;
+    }
+
+    bool testIsomorphism(Expr exp1, Expr exp2) {
+       if (exp1 == nullptr && exp2 == nullptr) {return true;}
+       if (exp1 == nullptr || exp2 == nullptr) {return false;}
+       ExprVector vars;
+       ExprMap matching;
+       filter(exp1, bind::IsConst(), inserter(vars, vars.begin()));
+       for (auto it = vars.begin(); it != vars.end();) {
+           if (find(baseconstrapps.begin(), baseconstrapps.end(), *it) == baseconstrapps.end()) {++it;}
+           else {it = vars.erase(it);}
+       }
+       if (findMatching(exp1, exp2, vars, matching)) {
+          //outs() << string(sp, ' ') << "expressions are isomorphic\n";
+          return true;
+       }
+       return false;
+    }
+
+
+    void getComposites() {
+       //pass 1, collect types
+       ExprSet es;
+       for (auto & it : constructors) {es.insert(it->last());}
+       //pass 2 compare input types to output types
+       //if a type is an ADT that is not a recursive call then add to composites
+       for (auto & it : constructors) {
+	  auto output_type = it->last();
+          for (int i = 1; i < it->arity() - 1; i++) {
+             auto input_type = it->arg(i);
+	     if (input_type == output_type) {continue;}
+	     auto res = es.find(input_type);
+	     if (res != es.end()) {compositeConstructors.insert(it);}
+	  }
+       }
+    }
+
+    bool syntaxTransformation1(Expr inp, Expr & res) {
+	if (isOpX<NEQ>(inp) || isOpX<EQ>(inp)) {
+           auto leftTerm = inp->left();
+           auto rightTerm = inp->right();
+	   ExprVector leftArgs_;
+	   ExprVector rightArgs_;
+	   ExprVector leftArgs;
+	   ExprVector rightArgs;
+	   function<bool(Expr)> varTest = [this](Expr x) {
+             //outs() << "CURRENT VAR IS: " << x << "\n";
+             for (int i = 0; i < baseconstrapps.size(); i++) {
+		//outs() << "BASE IS: " << baseconstrapps[i] << '\n';
+                if (baseconstrapps[i] == x) {outs() << "EQUALITY\n"; return false;}
+	     }
+	     return true;
+	   };
+           //outs() << string(sp+2, ' ') << "LEFT TERM IS: " << leftTerm << '\n';
+           //outs() << string(sp+2, ' ') << "RIGHT TERM IS: " << rightTerm << '\n'; 
+           filter(leftTerm, bind::IsConst(), inserter(leftArgs_, leftArgs_.begin()));
+	   filter(rightTerm, bind::IsConst(), inserter(rightArgs_, rightArgs_.begin()));
+	   //outs() << string(sp+2, ' ') << '[';
+	   //for (auto & it : leftArgs_) {outs() << it << ", ";}
+	   //outs() << "]\n";
+	   //outs() << string(sp+2, ' ') << '[';
+	   //for (auto & it : rightArgs_) {outs() << it << ", ";}
+	   //outs() << "]\n";
+           for (int i  = 0; i < leftArgs_.size(); i++) {
+              bool hit = false;
+              for (int j = 0; j < baseconstrapps.size(); j++) {
+                 if (leftArgs_[i] == baseconstrapps[j]) {hit = true; break;}
+	      }
+	      if (!hit) {leftArgs.push_back(leftArgs_[i]);}
+	   }
+	   for (int i = 0; i < rightArgs_.size(); i++) {
+              bool hit = false;	      
+              for (int j = 0; j < baseconstrapps.size(); j++) {
+                 if (rightArgs_[i] == baseconstrapps[j]) {hit = true; break;}
+	      }
+	      if (!hit) {rightArgs.push_back(rightArgs_[i]);}
+	   }
+	   /*outs() << string(sp+2, ' ') << '[';
+	   for (auto & it : leftArgs) {outs() << it << ", ";}
+	   outs() << "]\n";
+	   outs() << string(sp+2, ' ') << '[';
+	   for (auto & it : rightArgs) {outs() << it << ", ";}
+	   outs() << "]\n";*/
+	   if (leftArgs.size() != rightArgs.size()) {return false;}
+	   if (leftArgs.empty() && rightArgs.empty()) {
+              res = inp;
+	      return true;
+	   }
+	   if (isNestedType) {
+              res = inp;
+	      return true;
+	   }
+           //test if arg sizes are disequal
+
+	   //build disjunction
+	   ExprVector disequals;
+	   for (int i = 0; i < leftArgs.size(); i++) {
+              Expr diseq = mk<NEQ>(leftArgs[i], rightArgs[i]);
+	      disequals.push_back(diseq);
+	   }
+	   Expr disjunction = disjoin(disequals, efac);
+	   //outs() << string(sp+2, ' ') << "Final term: " << disjunction << '\n';
+	   res = disjunction;
+	   return true;
+	}
+	res = inp;
+	return true;
+    }
+
+    Expr syntaxTransformation2(Expr e) {
+       //two cases: natural numbers or lists
+       bool isNat = false;
+       if (isOpX<OR>(e)) {
+          //break appart disjunction
+	  ExprSet dsjs;
+	  ExprVector newTerms;
+	  getDisj(e, dsjs);
+	  for (auto & it : dsjs) {
+             Expr leftE = it->left();
+	     Expr rightE = it->right();
+	     Expr leftType = getADTType(leftE);
+	     Expr rightType = getADTType(rightE);
+	     if (find(types.begin(), types.end(), leftType) == types.end()) { //case of non-recursive type
+                //outs() << "it is " << it << '\n';
+		newTerms.push_back(it);
+	     }
+	     for (auto & is : naturalNumbers) { //is current term a natural number?
+                //outs() << "current type is " << leftType << '\n';
+                if (is->last() == leftType) {
+		   //outs() << "leftE is a natural number\n";
+                   isNat = true;
+		   break;
+	        }
+	     }
+	     if (isNat) { //yes, the current term is natural
+                Expr leftInt = naturalToPresburger(leftE);
+		Expr rightInt = naturalToPresburger(rightE);
+		newTerms.push_back(mk<NEQ>(leftInt, rightInt));
+		isNat = false;
+	     }
+	     else { //no, we still have a recursive type
+                Expr newExpr = syntaxTransformation2(it);
+		if (newExpr == NULL) {return NULL;}
+		//outs() << "newExpr is " << newExpr << '\n';
+		newTerms.push_back(newExpr);
+	     }
+	  }
+	  ExprSet newTermsSet(newTerms.begin(), newTerms.end());
+          return disjoin(newTermsSet, efac);
+       }
+       if (isOpX<EQ>(e) || isOpX<NEQ>(e)) {
+          Expr leftE = e->left();
+	  Expr rightE = e->right();
+	  if (leftE->arity() == 1 && rightE->arity() == 1) {return e;}
+	  //outs() << "right term is " << rightE << '\n';
+	  //outs() << "left term is " << leftE << '\n';
+	  Expr leftType = getADTType(leftE);
+	  Expr rightType = getADTType(rightE);
+	  ExprVector leftNestedTerms;
+	  ExprVector rightNestedTerms;
+	  for (auto & it : naturalNumbers) {
+             //outs() << "current type is " << leftType << '\n';
+             if (it->last() == leftType) {
+		//outs() << "leftE is a natural number\n";
+                isNat = true;
+		break;
+	     }
+	  }
+	  if (isNat) {
+             Expr leftInt = naturalToPresburger(leftE);
+	     Expr rightInt = naturalToPresburger(rightE);
+	     leftNestedTerms.push_back(leftInt);
+	     rightNestedTerms.push_back(rightInt);
+	     isNat = false;
+	  }
+	  //handle lhs
+	  for (int i = 0; i < leftE->arity(); i++) {
+             Expr currentArg = leftE->arg(i);
+	     Expr currentType = getADTType(currentArg);
+             //outs() << "\tSymbol in left term is: " << currentArg << '\n';
+	     //outs() << "\tType of symbol: " << currentType << '\n';
+	     //outs() << "\tTop type is: " << leftType << '\n';
+	     if (currentType != leftType) {
+                /*if (find(types.begin(), types.end(), currentType) != types.end()) {
+                   leftNestedTerms.push_back(currentArg);
+		}*/
+		if (!isOpX<FDECL>(currentArg)) {leftNestedTerms.push_back(currentArg);}
+	     }
+	     else {
+                leftE = currentArg;
+		i = -1;
+	     }
+	  }
+	  //for (auto & it : leftNestedTerms) {outs() << "left terms are: " << it << '\n';}
+	  //handle rhs
+	  for (int i = 0; i < rightE->arity(); i++) {
+             Expr currentArg = rightE->arg(i);
+	     Expr currentType = getADTType(currentArg);
+             //outs() << "\tSymbol in right term is: " << currentArg << '\n';
+	     //outs() << "\tType of symbol: " << currentType << '\n';
+	     //outs() << "\tTop type is: " << leftType << '\n';
+	     if (currentType != rightType) {
+                /*if (find(types.begin(), types.end(), currentType) != types.end()) {
+                   rightNestedTerms.push_back(currentArg);
+		}*/
+		if(!isOpX<FDECL>(currentArg)) {rightNestedTerms.push_back(currentArg);}
+	     }
+	     else {
+                rightE = currentArg;
+		i = 0;
+	     }
+	  }
+	  //for (auto & it : rightNestedTerms) {outs() << "right terms are: " << it << '\n';}
+	  //recombine lhs and rhs
+	  if (rightNestedTerms.size() != leftNestedTerms.size()) {return NULL;}
+	  ExprVector recombination;
+	  for (int i = 0; i < leftNestedTerms.size(); i++) {
+             auto tempExpr = mk<NEQ>(leftNestedTerms[i], rightNestedTerms[i]);
+	     recombination.push_back(tempExpr);
+	  }
+	  Expr result = disjoin(recombination, efac);
+	  outs() << string(sp + 2, ' ') << "Recombined term is: " <<  result << '\n';
+	  return syntaxTransformation2(result);
+       }
+       return e;
+    }
+
+    ExprVector getNaturalNumbers() {
+       ExprVector nats;
+       ExprVector natTypes;
+       for (auto & it : constructors) {
+          //outs() << "arity of constructor "<< it  << " is " << it->arity() << '\n';
+	  if (it->arity() == 3) {
+             bool isSameType = true;
+             for (int i = 1; i < it->arity(); i++) {
+                //outs() << "argument is " << it->arg(i) << '\n';
+		if (it->arg(i) != it->last()) {isSameType = false;}
+	     }
+	     if (isSameType) {
+                natTypes.push_back(it->last());
+	     }
+	  }
+       }
+       for (auto & it : natTypes) {
+          for (auto & is : constructors) {
+             if (is->last() == it) {
+                nats.push_back(is);
+	     }
+	  }
+       }
+       return nats;
+    }
+
+    Expr naturalToPresburger(Expr & exp) {
+       Expr e = exp;
+       int count = 0;
+       if (e->arity() == 1) {return mkMPZ(0, efac);}
+       //outs() << "e is " << e << '\n';
+       if (isOpX<FAPP>(e)) {
+          for (int i = 0; i < e->arity(); i++) {
+             //outs() << "ith arg is " << e->arg(i) << '\n';
+	     if (isOpX<FDECL>(e->arg(i))) {
+                if (e->arg(i)->arity() == 3) {
+                   count++;
+		}
+                else {break;}
+	     }
+	     if (isOpX<FAPP>(e->arg(i))) {
+                e = e->arg(i);
+		i = -1;
+		//outs() << "e is now " << e << '\n';
+	     }
+	  }
+	  //outs() << "count is " << count << '\n';
+	  return mkMPZ(count, efac);
+       }
+       return e;
+    }
+
+    //end of disproof section
 
     bool proveByContradiction (Expr subgoal)
     {
@@ -1865,6 +2654,11 @@ namespace ufo
         pprint(goal);
       }
 
+      //if disproof flag enabled
+      if (disproofDepth > 0) {return disproof(goal);}
+
+      //dumpToFile(goal, assumptions);
+
       for (int i = 0; i < goal->arity() - 1; i++)
       {
         Expr type = goal->arg(i)->last();
@@ -1893,8 +2687,9 @@ namespace ufo
     }
   };
 
+
   void adtSolve(EZ3& z3, Expr s, int maxDepth,
-                int maxGrow, int mergingIts, int earlySplit, bool verbose, int useZ3, int to)
+                int maxGrow, int mergingIts, int earlySplit, bool verbose, int useZ3, int to, int disproofDepth)
   {
     ExprVector constructors;
     for (auto & a : z3.getAdtConstructors()) constructors.push_back(regularizeQF(a));
@@ -1932,7 +2727,8 @@ namespace ufo
       return;
     }
 
-    ADTSolver sol (goal, assumptions, constructors, 0, 0, maxDepth, maxGrow, mergingIts, earlySplit, verbose, useZ3, to);
+    ADTSolver sol (goal, assumptions, constructors, 0, 0, maxDepth, maxGrow, mergingIts, earlySplit, verbose, useZ3, to, disproofDepth);
+    //sol.dumpToFile(goal, assumptions);
     tribool res = isOpX<FORALL>(goal) ? sol.solve() : sol.solveNoind();
     outs () << (res ? "unsat\n" : (!res ? "sat\n" : "unknown\n"));
   }
