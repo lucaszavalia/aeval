@@ -1,5 +1,5 @@
 (set-logic HORN)
-(declare-datatypes () ((Lst (cons (head Int) (tail Lst)) (nil))))
+(declare-datatypes ((Lst 0)) (((cons (head Int) (tail Lst)) (nil))))
 (declare-fun length (Lst Int) Bool)
 (declare-fun ff () Bool)
 (assert (length nil 0))

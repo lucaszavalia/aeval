@@ -4,10 +4,13 @@
 #include "deep/HornNonlin.hpp"
 #include "ADTSolver.hpp"
 #include "SimSynt.hpp"
-#include <algorithm>
+#include "ae/SMTUtils.hpp"
+#include <bits/stdc++.h>
+#include <thread>
 
 using namespace std;
 using namespace boost;
+
 namespace ufo
 {
   class CHCSolver {
@@ -26,6 +29,11 @@ namespace ufo
     int number_decls;
     bool givePriority = false;
     bool ignoreBaseVar = false;
+    bool saveDump = false;
+    int mode = 0; 
+    string salt;
+
+    SMTUtils u;
 
     map<Expr, Expr> baseConstructors;
     map<Expr, Expr> indConstructors;
@@ -35,8 +43,8 @@ namespace ufo
     map<Expr, Expr> interpretations;
 
   public:
-    CHCSolver(ExprVector& _constructors, ExprSet& _adts, ExprFactory &_efac, ExprSet &_decls, ExprVector &_assms, vector<HornRuleExt> &_chcs, bool _nonadtPriority = false, bool _ignoreBase = false) :
-      constructors(_constructors), adts(_adts), efac(_efac), decls(_decls), assumptions(_assms), chcs(_chcs), givePriority(_nonadtPriority), ignoreBaseVar(_ignoreBase) {}
+    CHCSolver(ExprVector& _constructors, ExprSet& _adts, ExprFactory &_efac, ExprSet &_decls, ExprVector &_assms, vector<HornRuleExt> &_chcs, bool _nonadtPriority = false, bool _ignoreBase = false, bool _saveDump = false, int _mode = 0) :
+      constructors(_constructors), adts(_adts), efac(_efac), decls(_decls), assumptions(_assms), chcs(_chcs), givePriority(_nonadtPriority), ignoreBaseVar(_ignoreBase), saveDump(_saveDump), mode(_mode), u(efac, 1000) {}
 
     Expr createNewApp(HornRuleExt chc, int i, int ind) {
       ExprVector types;
@@ -128,17 +136,26 @@ namespace ufo
     }
 
     Expr createDestination(HornRuleExt chc) {
-      int ind = values_inds[chc.dstRelation->left()];
+      int ind = values_inds[chc.dstRelation->left()]; //look at this
       ExprVector types;
       ExprVector newVars;
       for(int j = 0; j < chc.dstRelation->arity() - 2; ++j) {
         if (j != ind) {
+	  //outs() << "type in order " << bind::typeOf(chc.dstVars[j]) << '\n';
           types.push_back(bind::typeOf(chc.dstVars[j]));
           newVars.push_back(chc.dstVars[j]);
         }
       }
       types.push_back(bind::typeOf(chc.dstVars[ind]));
+      //outs() << "type out of order " << bind::typeOf(chc.dstVars[ind]) << '\n';
+      //for (auto it : types) {outs() << "Type is: " << it << '\n';}
+      if (isAnamorphism(types)) {
+         //outs() << "FDECL IS ANAMORPHIC\n";
+	 unAnamorphism(types);
+      }
+      //else {outs() << "FDECL IS NOT ANAMORPHIC\n";}
       Expr rel = bind::fdecl (efac.mkTerm(chc.dstRelation->left()->op()), types);
+      //outs() << "FDECL IS: " << rel << '\n';
       Expr baseApp = bind::fapp (rel, newVars);
       Expr destination = mk<EQ>(baseApp, chc.dstVars[ind]);
       return destination;
@@ -148,8 +165,10 @@ namespace ufo
       ExprVector cnj;
       ExprMap matching;
       Expr destination = bind::fapp (chc.dstRelation, chc.dstVars);
+      //outs() << "DESTINATION 1 IS: " << destination << '\n';
       if (decls.find(chc.dstRelation) != decls.end()) {
         destination = createDestination(chc);
+	//outs() << "DESTINATION 2 IS: " << destination << '\n';
         interpretations[chc.dstRelation] = destination;
       }
       replaceDeclsInLeftPart(chc, cnj);
@@ -167,6 +186,7 @@ namespace ufo
       return asmpt;
     }
 
+    //validate this function
     bool createAndCheckDefinition(Expr &decl) {
       ExprVector current_assumptions = assumptions;
       for (auto & chc : chcs) {
@@ -181,8 +201,10 @@ namespace ufo
                 if (isOpX<EQ>(body_elem)) {
                   if ((body_elem->left() == chc.dstVars[i] && body_elem->right()->arity() == baseConstructorArity) ||
                     (body_elem->right() == chc.dstVars[i] && body_elem->left()->arity() == baseConstructorArity)) {
-                    
+                   
+		    //outs() << "CURRENT CHC IS: " << chc.dstRelation << '\n'; 
                     Expr base_asmpt = convertToFunction(chc);
+		    //outs() << "\tTO FUNCTION: " << base_asmpt << '\n';
                     baseDefinitions[decl] = base_asmpt;
 
                     Expr indConstructor = indConstructors[bind::typeOf(chc.dstVars[i])];
@@ -219,7 +241,9 @@ namespace ufo
                               }
                             }
                             if (shouldBeChecked) {
+			      //outs() << "IND CHC BEFORE: " << ind_chc.dstRelation << '\n';
                               Expr ind_asmpt = convertToFunction(ind_chc);
+			      //outs() << "\tTO FUNCTION: " << ind_asmpt << '\n';
                               indDefinitions[decl] =  ind_asmpt;
                               bool foundRecursiveDefinition = true;
                               // We should check that for all rules (including non-definitive) this definition is correct
@@ -312,6 +336,7 @@ namespace ufo
           ExprVector current_assumptions = assumptions;
           goal = createQuantifiedFormula(goal, constructors);
           // Check if the goal may be proved in current interpretations
+	  Expr negGoal = mk<NEG>(goal);
           if (!prove (current_assumptions, goal)) {
             return false;
           }
@@ -384,11 +409,14 @@ namespace ufo
       idxs.erase(idxs.begin() + bv);
     }
 
+    //consider rewriting
     void givePriorityNonAdt(Expr& decl, std::vector<int> &idxs) {
       std::vector<int> new_idxs;
       bool nonadtExists = false;
+      outs() << "DECL IS: " << decl << '\n';
       for (auto & chc : chcs) {
         if (chc.dstRelation == decl) {
+	  outs() << "DST RELATION: " << chc.dstRelation << '\n';
           for (int i = 0; i < idxs.size(); ++i) {
             bool is_adt = false;
             for (auto & adt : adts) {
@@ -405,6 +433,7 @@ namespace ufo
           if (nonadtExists) {
             for (int i = 0; i < idxs.size(); ++i) {
               for (auto & adt : adts) {
+		//if an adt variable is found
                 if ((*chc.dstRelation)[idxs[i]] == adt) {
                   new_idxs.push_back(idxs[i]);
                   break;
@@ -415,6 +444,9 @@ namespace ufo
           }
           break;
         }
+      }
+      for (int i = 0; i < idxs.size(); i++) {
+         outs() << "idxs IS: " << idxs[i] << '\n';
       }
     }
 
@@ -449,16 +481,18 @@ namespace ufo
 
     bool findInterpretations(int idx, std::map<Expr,int> &buf) {
       if (idx >= ordered_decls.size()) {
-        values_inds = buf;
+        values_inds = buf; //look at this
         assumptions.clear();
         return createAndCheckInterpretations();
       }
       // Get the possible version of return variables
       Expr cur = ordered_decls[idx];
       for (auto & chc : chcs) {
+	//outs() << "ping 1\n";
         if (chc.dstRelation == cur) {
+	  //outs() << "ping 2\n";
           size_t vars_size = chc.dstRelation->arity();
-          std::vector<int> idxs;
+          std::vector<int> idxs; //idxs created here
           for (int i = 0; i < vars_size - 2; ++i) {
             idxs.push_back(i);
           }
@@ -467,7 +501,7 @@ namespace ufo
           if (givePriority) givePriorityNonAdt(cur, idxs);
            // outs() << *chc.dstRelation->left() << " " << idxs.size() << "\n";
           for (int i = idxs.size() - 1; i >= 0; --i) {
-            buf[chc.dstRelation->left()] = idxs[i];
+            buf[chc.dstRelation->left()] = idxs[i]; //look at this
             // outs() << *chc.dstRelation->left() << " " << idxs[i] << "\n";
             if (findInterpretations(idx + 1, buf))
               return true;
@@ -566,12 +600,245 @@ namespace ufo
 
     bool prove (ExprVector& lemmas, Expr fla, int rounds = 2, bool print = false)
     {
-      ADTSolver sol (fla, lemmas, constructors); // last false is for verbosity
-      return isOpX<FORALL>(fla) ? sol.solve() : sol.solveNoind(rounds);
+      //outs() << "FLA IS: " << fla << '\n';
+      //for (auto & it : lemmas) {outs() << "LEMMA IS: " << it << '\n';}
+      //for (auto & it : constructors) {outs() << "CONSTRUCOTR IS: " << it << '\n';}
+      outs() << "MODE IS " << mode << "\n\n";
+      //prepare current pid
+      auto pid = this_thread::get_id();
+      stringstream ss;
+      ss << pid;
+      salt = ss.str();
+      if (mode == 3 || mode == 2 || mode == 4) {
+	static int i = 0;
+	string solver_exe;
+	string solver_flag;
+	string search_string;
+        //auto values = findSolver();
+	if (mode == 3) {
+	   outs() << "Calling vampire in induction mode\n";
+	   solver_exe = "/home/lucas/Desktop/Solvers/vampire/build/bin/vampire_rel_master_6513";
+	   solver_flag = " --input_syntax smtlib2 --mode portfolio --schedule struct_induction --proof on ";
+	   search_string = " | grep Unsatisfiable"; 
+	}
+	if (mode == 2) {
+           outs() << "Calling vampire in portfolio mode\n";
+	   solver_exe = "/home/lucas/Desktop/Solvers/vampire/build/bin/vampire_rel_master_6513";
+           solver_flag = " --input_syntax smtlib2 --mode portfolio --proof on";
+	   search_string = " | grep Unsatisfiable";
+	}
+	if (mode == 4) {
+           outs() << "Calling cvc5 in induction mode\n";
+           solver_exe = "/home/lucas/Desktop/Solvers/cvc5/build/bin/cvc5";
+	   solver_flag = " --quant-ind ";
+	   search_string = " | grep unsat";
+	}
+	string cmd;
+	saveDump = false;
+
+	if (saveDump) {
+      	   dumpToFile(constructors, lemmas, fla, true);
+	   
+           cmd = solver_exe + solver_flag + " output_" + to_string(i) + "_" + salt + ".smt2" + search_string;
+	   i++; 
+	}
+	else {
+      	   dumpToFile(constructors, lemmas, fla, false);
+	   //invoke this thread
+	   //create string stream
+	   //concat with output
+
+	   cmd = solver_exe + solver_flag + " output_" + salt + ".smt2" + search_string;
+	}
+	int cmdResult = system(cmd.c_str());
+	outs() << "COMMAND RESULT IS: " << cmdResult << '\n';
+	string remove = "rm -rf output_" + salt + ".smt2";
+	if (!saveDump) {system(remove.c_str());}
+	outs() << "End of solver call\n";
+	return (cmdResult == 0) ? true : false; //figure out how to tell if vampire was SAT/UNSAT/Unknown
+      }
+      else {
+        if (mode == 1) {
+      	   ADTSolver sol (fla, lemmas, constructors); // last false is for verbosity
+      	   return isOpX<FORALL>(fla) ? bool(sol.solve()) : bool(sol.solveNoind(rounds));
+	}
+	if (mode == 0) {
+           ADTSolver sol (fla, lemmas, constructors);
+           sol.toggleDisproof();
+      	   return isOpX<FORALL>(fla) ? bool(sol.solve()) : bool(sol.solveNoind(rounds));
+	}
+      }
     }
+
+    vector<string> findSolver() {
+      char * path = getenv("PATH");
+      vector<string> result;
+      if (path != nullptr) {
+        string new_path = string(path);
+	size_t pos = 0;
+        string token;
+	string delimiter = ":";
+	vector<string> pathes;
+        while ((pos = new_path.find(delimiter)) != string::npos) {
+           token = new_path.substr(0, pos);
+           outs() << token << endl;
+           new_path.erase(0, pos + delimiter.length());
+	   pathes.push_back(token);  
+        }
+        for (auto & it : pathes) {
+           string cur = it;
+	   string vampire = cur + "/vampire";
+	   result.push_back(vampire);
+	   string cvc5 = cur + "/cvc5";
+	   result.push_back(cvc5);
+	}
+      }
+      for (auto & it : result) {outs() << "PATH IS " << it << '\n';}
+      return result;
+    }
+
+    //code for dumping to a file
+    void dumpToFile(ExprVector consList, ExprVector assms, Expr goal, bool saveDump = false) {
+       ofstream outputFile;
+       static int i = 0;
+       auto pid = this_thread::get_id();
+       stringstream ss;
+       ss << pid;
+       auto tmpFilename = "output_" + ss.str() +  ".smt2";
+       if (!saveDump) {outputFile.open(tmpFilename, ofstream::out | ofstream::app);}
+       else {
+          string filename = "output_" + to_string(i) + "_" + ss.str() + ".smt2";
+	  outputFile.open(filename, ofstream::out | ofstream::app);
+	  i++;
+       }
+       outputFile << "(set-logic ALL)\n";
+       static bool didtypes = false;
+       if (!didtypes) {
+          serializeTypes(consList, outputFile);
+	  //didtypes = true;
+       }
+       static bool didfuns = false;
+       if (!didfuns) {
+          serializeFDecls(consList, assms, goal, outputFile);
+	  //didfuns = true;
+       }
+       for (auto & it : assms) {u.serialize_to_stream(it, outputFile);}
+       u.serialize_to_stream(mk<NEG>(goal), outputFile);
+       outputFile << "(check-sat)";
+       outputFile.close();
+    }
+
+    void serializeTypes(ExprVector consList, ostream& out = outs()) {
+       //step 1, collect adt types and constructors
+       map<Expr, ExprVector> newConstructors; //should have form <type, constructors>
+       ExprVector typeVect;
+       typeVect.resize(consList.size());
+       transform(consList.begin(), consList.end(), typeVect.begin(), [](Expr x){ return x->last(); });
+       unique(typeVect.begin(), typeVect.end());
+       for (auto & it : typeVect) {
+  	  if (it == NULL) {continue;}
+          ExprVector tempCons;
+          tempCons.resize(consList.size());
+          copy_if(consList.begin(), consList.end(), tempCons.begin(), [it](Expr x){return (x->last() == it);});
+          newConstructors.emplace(it, tempCons);
+       }
+       /*for (auto & is : newConstructors) {
+          outs() << "First is: " << is.first << '\n';
+	  for (auto & iu : is.second) {
+             outs() << "Second is: " << iu << '\n';
+	  }
+	  outs() << '\n';
+       }*/
+       //step 2, iterate over newConstructors map and print info
+       for (auto it : newConstructors) {
+          out << "(declare-datatypes ";
+          out << "((" << it.first->arg(0);
+          out << " 0)) ";
+          out << "((";
+	  static int counter = 0;
+          for (auto is : it.second) {
+	     if (is == NULL) {continue;}
+             out << "(" << is->arg(0);
+             if (is->arity() > 2) {out << " ";}
+             for (int i = 1; i < is->arity() - 1; i++) {
+                auto temp = is->arg(i);
+                if (isOpX<AD_TY>(temp)) {
+                   out <<  " (param" << counter << " ";
+                   out << temp->arg(0);
+                   out << ")";
+		   counter++;
+                }
+                else {
+                   out << "(param" << counter << " ";
+                   u.print(temp, out);
+                   out << ")";
+		   counter++;
+                }
+             }
+             out << ")";
+          }
+          out << "))";
+          out << ")\n";
+       }
+    }
+
+    void serializeFDecls(ExprVector consList, ExprVector assm, Expr goal, ostream& out = outs()) {
+       //step 1, collect all fdecls
+       assm.push_back(goal);
+       ExprSet fdeclSet;
+       for (auto & it : interpretations) filter(it.second, [](Expr x){return isOpX<FDECL>(x) && x->arity() > 2;}, inserter(fdeclSet, fdeclSet.begin()));
+       filter(goal, [consList](Expr x){return isOpX<FDECL>(x) && x->arity() > 2 && find(consList.begin(), consList.end(), x) == consList.end();}, inserter(fdeclSet, fdeclSet.begin()));
+
+       //step 2, loop over fdecls and print info
+       for (auto is : fdeclSet) {
+          out << "(declare-fun ";
+	  out << is->arg(0);
+	  out << " (";
+	  for (int i = 1; i < is->arity() - 1; i++) {
+             auto temp = is->arg(i);
+             if (isOpX<AD_TY>(temp)) {out << temp->arg(0) << " ";}
+	     else {
+                u.print(temp, out);
+		out << " ";
+	     }
+	  }
+	  out << ") ";
+	  auto temp = is->last();
+	  if (isOpX<AD_TY>(temp)) {out << temp->arg(0);}
+	  else {u.print(temp, out);}
+	  out << ")\n";
+       }
+    }
+
+    bool isAnamorphism(ExprVector & types) {
+       //pop the last type off of types
+       Expr retType = types.back();
+       //if the last type is basic type return false
+       if (adts.find(retType) == adts.end()) {return false;}
+       //else loop over all types up to (but not including the last type
+       //if no types are ADTs, return true
+       //else return false
+       else {
+	  bool isAna = true;
+          for (auto it = types.begin(); it != types.end() -1; it++) {
+             if (adts.find(*it) != adts.end()) {isAna = false;}
+	  }
+	  return isAna;
+       }
+    }
+
+    void unAnamorphism(ExprVector & types) {
+       Expr retType = types.back();
+       types.pop_back();
+       Expr newRetType = types.back();
+       types.pop_back();
+       types.push_back(retType);
+       types.push_back(newRetType);
+    }
+
   };
 
-  void chcSolve(char * smt_file, bool givePriorityNonAdt, bool ignoreBaseVar)
+  void chcSolve(char * smt_file, bool givePriorityNonAdt, bool ignoreBaseVar, bool save_dump, int solver_mode)
   {
     ExprFactory efac;
     EZ3 z3(efac);
@@ -590,7 +857,7 @@ namespace ufo
     }
 
     CHCSolver sol (constructors, adts, efac, decls, ruleManager.extras, ruleManager.chcs,
-      givePriorityNonAdt, ignoreBaseVar);
+      givePriorityNonAdt, ignoreBaseVar, save_dump, solver_mode);
     bool res = containsOp<ARRAY_TY>(conjoin(decls, efac)) ? sol.solveArr() : sol.solve();
     outs () << (res ? "sat\n" : "unknown\n");
   }

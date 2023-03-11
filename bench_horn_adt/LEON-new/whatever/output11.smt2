@@ -1,0 +1,8 @@
+(declare-datatypes ((Lst 0)) (((cons (param44 Int) (param45 Lst))(nil))))
+(declare-datatypes ((Queue 0)) (((queue  (param46 Lst) (param47 Lst)))))
+(declare-fun append (Lst Lst ) Lst)
+(declare-fun len (Lst ) Int)
+(assert (forall ((|_FH_2'| Lst)) (= (append nil |_FH_2'|) |_FH_2'|)))
+(assert (forall ((x Int) (_FH_0 Lst) (_FH_1 Lst)) (= (append (cons x _FH_0) _FH_1) (cons x (append _FH_0 _FH_1)))))
+(assert (not (forall ((x Int) (_FH_0 Lst) (_FH_1 Lst)) (= (append (cons x _FH_0) _FH_1) (cons x (append _FH_0 _FH_1))))))
+(check-sat)
