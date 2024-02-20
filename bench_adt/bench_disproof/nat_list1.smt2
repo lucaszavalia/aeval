@@ -1,6 +1,6 @@
 (set-logic ALL)
-(declare-datatypes () ((Nat (S (tail Nat)) (Z))))
-(declare-datatypes () ((Lst (cons (head Nat) (tail Lst)) (nil))))
+(declare-datatypes ((Nat 0)) (((S (tail0 Nat)) (Z))))
+(declare-datatypes ((Lst 0)) (((cons (head Nat) (tail1 Lst)) (nil))))
 
 (declare-fun append (Lst Lst) Lst)
 (assert (forall ((x Lst)) (= (append nil x) x)))

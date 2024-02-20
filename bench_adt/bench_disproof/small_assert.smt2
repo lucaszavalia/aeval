@@ -1,0 +1,6 @@
+(set-logic ALL)
+(declare-datatypes ((Lst 0)) (((cons (head Int) (tail Lst)) (nil))))
+(declare-fun x0 () Int)
+(assert (not ((= (cons x0 nil) nil))))
+(check-sat)
+(get-model)

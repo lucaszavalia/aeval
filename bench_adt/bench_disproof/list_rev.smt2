@@ -1,5 +1,5 @@
 (set-logic ALL)
-(declare-datatypes () ((Lst (cons (head Int) (tail Lst)) (nil))))
+(declare-datatypes ((Lst 0)) (((cons (head Int) (tail Lst)) (nil))))
 
 (declare-fun append (Lst Lst) Lst)
 (assert (forall ((x Lst)) (= (append nil x) x)))

@@ -50,8 +50,14 @@ int main (int argc, char ** argv)
   int earlySplit = atoi(getStrValue("--early-split", "1", argc, argv));
   bool useZ3 = !getBoolValue("--no-z3", false, argc, argv);
   unsigned to = atoi(getStrValue("--to", "1000", argc, argv));
+  unsigned ddepth = atoi(getStrValue("--disproof-depth", "0", argc, argv));
+  unsigned sdepth = atoi(getStrValue("--disproof-special", "0", argc, argv)); //for special test
+  if (sdepth != 0) {
+    SPECIAL_FLAG = true;
+    ddepth = sdepth;
+  }
   Expr e = z3_from_smtlib_file (z3, infile);
-  adtSolve(z3, e, maxDepth, maxGrow, mergingIts, earlySplit, true, useZ3, to);
+  adtSolve(z3, e, maxDepth, maxGrow, mergingIts, earlySplit, true, useZ3, to, ddepth);
 
   return 0;
 }

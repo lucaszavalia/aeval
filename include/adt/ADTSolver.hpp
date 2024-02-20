@@ -10,6 +10,9 @@
 
 using namespace std;
 using namespace boost;
+
+bool SPECIAL_FLAG = false;
+
 namespace ufo
 {
   class ADTSolver
@@ -1221,19 +1224,20 @@ namespace ufo
        //remove quantifier
        if (isOpX<FORALL>(exp) || isOpX<EXISTS>(exp)) {newExpr = exp->last();}
        else {newExpr = exp;}
+       if (SPECIAL_FLAG == true) {newExpr = simplifyBool(mk<NEG>(newExpr));} //special flag is for when the goal is actually true but we wish to disprove its negation (data for master's project)
        //collect finalTerms
        ExprSet finalTerms = generateTerms(newExpr, disproofDepth);
        //get template for nested ADT handler
        Expr candidate_fdecl;
        if (!finalTerms.empty()) {
           auto tempIter = *(finalTerms.begin()++);
-	  candidate_fdecl = templateFdecl;
-	  //outs() << "Candidate fdecl is " << candidate_fdecl << '\n';
+	       candidate_fdecl = templateFdecl;
+	      //outs() << "Candidate fdecl is " << candidate_fdecl << '\n';
        }
        outs() << string(sp + 2, ' ') << "generated " << finalTerms.size() << " terms {\n";
        for (auto & it : finalTerms){outs() << string(sp + 4, ' ') << it << "\n";}
        outs() << string(sp + 2, ' ') << "}\n";
-       outs() << string(sp + 2, ' ') << "unfolding terms\n";
+       outs() << string(sp + 2, ' ') << "unrolling terms\n";
        int counter = 0;
        int breaker = 0;
        for (auto it = finalTerms.begin(); it != finalTerms.end(); it++) {
@@ -1256,7 +1260,7 @@ namespace ufo
              else {old = temp;}
              //if (isOpX<TRUE>(temp)) break;
           }
-          outs() << string(sp + 2, ' ') << "unfolded term: " << temp << '\n';
+          outs() << string(sp + 2, ' ') << "unrolled term: " << temp << '\n';
 	  if (isOpX<TRUE>(temp)){continue;}
 	  Expr trans;
 	  auto syn_res = syntaxTransformation1(temp, trans);
@@ -1288,15 +1292,15 @@ namespace ufo
           counter++;
 	  outs() << string(sp + 2, ' ') << "transformed term: " << temp << '\n';
 	  if (!disproofFilter2(temp)) {
-	     outs() << string(sp + 2, ' ') << "unfolding failed at term " << temp << '\n';
+	     outs() << string(sp + 2, ' ') << "unrolling failed at term " << temp << '\n';
              continue;
 	  }
           //temp = mk<IMPL>(temp, mk<TRUE>(efac));          
 	  auto ttt = u.isSat(temp);
 	  Expr model;
-	  if ((ttt == true && isSame != true) || (ttt != true && isSame == true) || (ttt != true && resNested == true))
+	  if (ttt == true)
 	  {
-	     outs() << string(sp + 2, ' ') << "Last term is " << temp << '\n';
+	     //outs() << string(sp + 2, ' ') << "Last term is " << temp << '\n';
              model = u.getModel();
 	     //if (isOpX<TRUE>(model)) {continue;}
 	     // TODO: report disproof
@@ -1317,6 +1321,118 @@ namespace ufo
        return indeterminate;
     }
 
+    tribool fuzzDisproof(Expr exp) {
+       outs() << string(sp, ' ') << "Attempting to disprove: " << exp << '\n';
+       outs() << string(sp, ' ') << "Disproof depth is set to: " << disproofDepth << '\n';
+       outs() << string(sp, ' ') << "{\n";
+       ExprVector vars;
+       Expr newExpr;
+       //compute types set and natural number vector, used for handling nested adts
+       for (auto & it : constructors) {
+          types.insert(it->last());
+       }
+       naturalNumbers = getNaturalNumbers();
+       //remove quantifier
+       if (isOpX<FORALL>(exp) || isOpX<EXISTS>(exp)) {newExpr = exp->last();}
+       else {newExpr = exp;}
+       if (SPECIAL_FLAG == true) {newExpr = simplifyBool(mk<NEG>(newExpr));} //special flag is for when the goal is actually true but we wish to disprove its negation (data for master's project)
+       //collect finalTerms
+       ExprSet finalTerms = generateTerms(newExpr, disproofDepth);
+       //get template for nested ADT handler
+       Expr candidate_fdecl;
+       if (!finalTerms.empty()) {
+          auto tempIter = *(finalTerms.begin()++);
+	       candidate_fdecl = templateFdecl;
+	      //outs() << "Candidate fdecl is " << candidate_fdecl << '\n';
+       }
+       outs() << string(sp + 2, ' ') << "generated " << finalTerms.size() << " terms {\n";
+       for (auto & it : finalTerms){outs() << string(sp + 4, ' ') << it << "\n";}
+       outs() << string(sp + 2, ' ') << "}\n";
+       outs() << string(sp + 2, ' ') << "unrolling terms\n";
+       int counter = 0;
+       int breaker = 0;
+       for (int = 0; i < 20; i++) { //eventually remove hardcoded 20, this is code stink
+          Expr temp = fuzz(newExpr, disproofDepth) //don't actually call the fuzz function here, there needs to be a function that substitutes literals into terms.
+          Expr old = temp;
+          while (true) { // this portion will need to be a recursive function (for completeness, not as important)
+             ExprVector results;
+             for (auto is = assumptions.begin(); is != assumptions.end(); is++) {
+                //locate specific function definitions
+                //when reading file, extract definitions
+                //pattern match for two assumptions, one will have base cons the other will be ind
+                //
+                useAssumption(temp, *is, results);
+                if (!results.empty()) {
+                   temp = results[0];
+                }
+             }
+	     //make a filter to keep nonsense from going to z3 (more important)
+             if (old == temp) {break;}
+             else {old = temp;}
+             //if (isOpX<TRUE>(temp)) break;
+          }
+          outs() << string(sp + 2, ' ') << "unrolled term: " << temp << '\n';
+	  if (isOpX<TRUE>(temp)){continue;}
+	  Expr trans;
+	  auto syn_res = syntaxTransformation1(temp, trans);
+	  bool isSame = false;
+	  bool resNested = false;
+	  if (syn_res) {
+             if (temp == trans) {isSame = true;}
+             temp = trans;
+	  }
+	  else {
+             outs() << string(sp + 2, ' ') << "Syntactic check failed for " << temp << '\n';
+	     return true;
+	  }
+	  if (isNestedType) {
+             Expr newTemp = syntaxTransformation2(temp);
+	     if (newTemp == NULL) {
+                outs() << string(sp + 2, ' ') << "Syntactic check failed for " << temp << '\n';
+		return true;
+	     }
+	     temp = newTemp;
+	     resNested = true;
+	  }
+	  //Expr throwAway = nestedADTHandler(temp, candidate_fdecl);
+	  //outs() << "Unfolded nest ADT is: " << throwAway << '\n';
+	  //temp = throwAway;
+	  //
+	  //dumpToFile(constructors, assumptions, temp, true);
+          //outs() << "    counter: " << counter << '\n';
+          counter++;
+	  outs() << string(sp + 2, ' ') << "transformed term: " << temp << '\n';
+	  if (!disproofFilter2(temp)) {
+	     outs() << string(sp + 2, ' ') << "unrolling failed at term " << temp << '\n';
+             continue;
+	  }
+          //temp = mk<IMPL>(temp, mk<TRUE>(efac));          
+	  auto ttt = u.isSat(temp);
+	  Expr model;
+	  if (ttt == true)
+	  {
+	     //outs() << string(sp + 2, ' ') << "Last term is " << temp << '\n';
+             model = u.getModel();
+	     //if (isOpX<TRUE>(model)) {continue;}
+	     // TODO: report disproof
+             outs() << string(sp + 2, ' ') << "Disproven with Z3.\n";
+	     outs() << string(sp + 2, ' ') << "Counterexample: " << model << '\n';
+             outs() << string(sp, ' ') << "}\n";
+             return true;
+          }
+          if (counter == 20 || counter == finalTerms.size() - 1) {
+            outs() << string(sp + 2, ' ') << "Tested maximum number of terms\n";
+            outs() << string(sp, ' ') << "}\n";
+            return indeterminate;
+          };
+       }
+       outs() << string(sp + 2, ' ') << "Disproof failed.\n";
+       outs() << string(sp, ' ') << "}\n";
+       //experiment here with useAssumption, run on an infinite loop that replaces each rev2 instance one at a time
+       return indeterminate;
+     
+    }
+
     ExprSet generateTerms(Expr exp, int length) {
        ExprSet startSet;
        ExprSet results;
@@ -1324,11 +1440,14 @@ namespace ufo
        //collect variables and remove constants
        ExprVector vars;
        filter(exp, bind::IsConst(), inserter(vars, vars.begin()));
-       Expr base =  mk<FAPP>(*find_if(constructors.begin(), constructors.end(), [](Expr x){return x->arity() == 2;}));
+       if (!constructors.empty()) {
+       auto base_ = find_if(constructors.begin(), constructors.end(), [](Expr x){return x != NULL ? x->arity() == 2 : false;});
+       if (base_ != constructors.end()) {
+       Expr base = mk<FAPP>(*base_);
        for (auto it = vars.begin(); it != vars.end(); ) {
          if (*it == base) {vars.erase(it);}
          else it++;
-       }
+       }}}
        //call unwrapped function
        generateTermsUnwrapped(exp, startSet, vars, length, results);
        return results;
@@ -1349,28 +1468,29 @@ namespace ufo
        for (auto it = start.begin(); it != start.end(); it++) {
           for (auto is = newTerms.begin(); is != newTerms.end(); is++) {
              if (curVarType == getADTType(*is)) {		
-		auto new_term = *is;
-		bool res = testIsomorphism(old, new_term);
-		bool normal = false;
-		if (!normal) {
-                   if (!res) {
-		      Expr temp = replaceAll(*it, curVar, *is);
-                      newSet.insert(temp);
-		   }
-		}
-		else {
-                   Expr temp = replaceAll(*it, curVar, *is);
-		   newSet.insert(temp);
-		}
-/*
-		outs() << string(sp+4, ' ') << "Current term: " << temp << '\n';
-		outs() << string(sp+4, ' ') << "Substitution: " << *is << '\n';
-		outs() << string(sp+4, ' ') << "Old data is : " << old << '\n';
-		outs() << string(sp+4, ' ') << "Result is   : " << res << '\n';*/
+		         auto new_term = *is;
+		         bool res = testIsomorphism(old, new_term);
+		         bool normal = false;
+               Expr temp = NULL;
+		         if (!normal) {
+                 if (!res) {
+		             temp = replaceAll(*it, curVar, *is);
+                   newSet.insert(temp);
+		           }
+		         }
+		         else {
+                  temp = replaceAll(*it, curVar, *is);
+		            newSet.insert(temp);
+		         }
+		         //outs() << string(sp+4, ' ') << "Current term: " << temp << '\n';
+		         /*outs() << string(sp+4, ' ') << "Substitution: " << *is << '\n';
+		         outs() << string(sp+4, ' ') << "Old data is : " << old << '\n';
+		         outs() << string(sp+4, ' ') << "Result is   : " << res << '\n';*/
              }
-	     old = * is;
+	          old = * is;
           }
        }
+       //if (newSet.size() > 20) {return;}
        generateTermsUnwrapped(exp, newSet, vars, length, result);
     }
 
@@ -1420,8 +1540,8 @@ namespace ufo
        //newTerms should only contain FAPP of base cons
        //outs() << "DEPTH IS: " << depth << "\n";
        if (depth == 0) {
-	  templateFdecl = templateExp;
-          return;
+         templateFdecl = templateExp;
+         return;
        }
        //is not a composite ADT
        /*getComposites();
@@ -1439,9 +1559,9 @@ namespace ufo
           for (int i = 1; i < templateExp->arity()-1; i++) {
              if (templateExp->arg(i) != templateExp->last()) {
                 Expr var = bind::mkConst(mkTerm<string>("_o_" + to_string(i), efac), templateExp->arg(i));
-		vars.insert(var);
-	     }
-	  }
+		          vars.insert(var);
+	          }
+	       }
        }
        auto iter = vars.begin();
        for (int i = 1; i < templateExp->arity()-1; i++) {
@@ -1450,56 +1570,62 @@ namespace ufo
              if (templateExp->arg(i) == templateExp->last()) {
                 for (auto & is : newTerms) {
                    ExprVector temp(it.begin(), it.end());
-		   //outs() << "is in case 1 is: " << is << '\n';
-		   //outs() << "it in case 1 is: " << mknary<FAPP>(temp) << '\n';
+		             //outs() << "is in case 1 is: " << is << '\n';
+		             //outs() << "it in case 1 is: " << mknary<FAPP>(temp) << '\n';
                    temp.push_back(is);
                    newMemo.push_back(temp);
                    //outs() << "RESULT OF CASE 1: " << mknary<FAPP>(temp) << "\n";
                 }
              }
              //current arg has other ADT type
-	     else if (find(types.begin(), types.end(), templateExp->arg(i)) != types.end()) {
-		isNestedType = true;
-		Expr type = templateExp->arg(i);
-		//outs() << "Nested type " << type << endl;
-                ExprSet newStartSet;
-		ExprSet newVars;
-		Expr newBase = mk<FAPP>(*find_if(constructors.begin(), constructors.end(), [type](Expr x){return (x->arity() == 2 && x->last() == type);}));
-		//outs() << "New base is " << newBase << endl;
-                Expr newTemplate = *find_if(constructors.begin(), constructors.end(), [type](Expr x){return (x->arity() > 2 && x->last() == type);});
-		//outs() << "New template is " << newTemplate << endl;
-		newStartSet.insert(newBase);
-		generateADTs(newTemplate, newStartSet, newVars, disproofDepth);
-		for (auto & nss : newStartSet) {
-		   Expr tempExpr = nss;
-                   //outs() << "Nested term is " << nss << endl;
-		   ExprVector temp(it.begin(), it.end());
-                   for (auto & jt : newVars) {
-                      bool stopCondition = true;
-		      while (stopCondition) {
-                         Expr type = jt->last()->last();
-		         //outs() << "variable type is: " << type << '\n';
-		         Expr newVar = spawnVar(type);
-		         //outs() << "Before replace one\n";
-		         auto resRep = replaceOne(tempExpr, jt, newVar);
-		         tempExpr = resRep.first;
-		         stopCondition = resRep.second;
-		         //outs() << "In while loop, expr is " << tempExpr << '\n';
-		      }
-		      //outs() << "Exiting while loop\n";
-		   }
-		   temp.push_back(tempExpr);
-		   newMemo.push_back(temp);
-		}
-	        	
-	     }
-	     //otherwise
+	          else if (find(types.begin(), types.end(), templateExp->arg(i)) != types.end()) {
+		         isNestedType = true;
+		         Expr type = templateExp->arg(i);
+		         //outs() << "Nested type " << type << endl;
+               ExprSet newStartSet;
+		         ExprSet newVars;
+		         Expr newBase = mk<FAPP>(*find_if(constructors.begin(), constructors.end(), [type](Expr x){return (x->arity() == 2 && x->last() == type);}));
+		         //outs() << "New base is " << newBase << endl;
+               Expr newTemplate = *find_if(constructors.begin(), constructors.end(), [type](Expr x){return (x->arity() > 2 && x->last() == type);});
+		         //outs() << "New template is " << newTemplate << endl;
+		         newStartSet.insert(newBase);
+		         generateADTs(newTemplate, newStartSet, newVars, disproofDepth);
+		         for (auto & nss : newStartSet) {
+		           Expr tempExpr = nss;
+                 //outs() << "Nested term is " << nss << endl;
+		           ExprVector temp(it.begin(), it.end());
+                 for (auto & jt : newVars) {
+                   bool stopCondition = true;
+		             while (stopCondition) {
+                     Expr type = jt->last()->last();
+		               //outs() << "variable type is: " << type << '\n';
+		               Expr newVar = spawnVar(type);
+		               //outs() << "Before replace one\n";
+		               auto resRep = replaceOne(tempExpr, jt, newVar);
+		               tempExpr = resRep.first;
+		               stopCondition = resRep.second;
+		               //outs() << "In while loop, expr is " << tempExpr << '\n';
+		             }
+		               //outs() << "Exiting while loop\n";
+		           }
+		           temp.push_back(tempExpr);
+		           newMemo.push_back(temp);
+		         }
+	          }
+	          //otherwise
              else {
-		outs() << "type is: " << templateExp->arg(i) << '\n';
+		          //outs() << "type is: " << templateExp->arg(i) << '\n';
+		          //outs() << "ITER IS " << *iter << " VARS END IS " << *(--vars.end()) << " DEPTH IS " << disproofDepth << endl;
+		          //outs() << "VARS CONTAINS ";
+		          /*for (auto & wht : vars) {outs() << wht->last() << " ";}
+		          outs() << endl;*/
                 ExprVector temp(it.begin(), it.end());
-		Expr var = *iter;
-		if (iter == vars.end()) {iter = vars.begin();}
-		else {iter++;}
+		          Expr var;
+		          if (iter == vars.end()) {/*outs() << "ITER IS END\n";*/ iter = vars.begin();}
+		          else {
+                   var = *iter;
+		             iter++;
+		          }
                 temp.push_back(var);
                 newMemo.push_back(temp);
                 //outs() << "RESULT OF CASE 2: " << mknary<FAPP>(temp) << "\n";
@@ -1511,20 +1637,20 @@ namespace ufo
        //turn each element of memo to FAPP
        for (auto & it : memo) {
           Expr temp = mknary<FAPP>(it);
-	  /*for (auto & jt : vars) { //code for making unique variables
-             bool stopCondition = true;
-	     outs() << "Before the loop\n";
-	     while (stopCondition) {
-		Expr newVar = spawnVar(jt->last()->last());
-                auto res = replaceOne(temp, jt, newVar);
-		temp = res.first;
-		stopCondition = res.second;
-	     }
-	     outs() << "After the loop\n";
-	  }*/
+	       /*for (auto & jt : vars) { //code for making unique variables
+          bool stopCondition = true;
+	       outs() << "Before the loop\n";
+	       while (stopCondition) {
+		      Expr newVar = spawnVar(jt->last()->last());
+            auto res = replaceOne(temp, jt, newVar);
+		      temp = res.first;
+	 	      stopCondition = res.second;
+	       }
+	       outs() << "After the loop\n";
+	      }*/
 
-	  //outs() << "new term in generateADTs is " << temp << '\n';
-          newTerms.insert(temp);
+	      //outs() << "new term in generateADTs is " << temp << '\n';
+         newTerms.insert(temp);
        }
        generateADTs(templateExp, newTerms, vars, depth-1);
 
@@ -1614,6 +1740,7 @@ namespace ufo
     bool testIsomorphism(Expr exp1, Expr exp2) {
        if (exp1 == nullptr && exp2 == nullptr) {return true;}
        if (exp1 == nullptr || exp2 == nullptr) {return false;}
+       if (treeSize(exp1) != treeSize(exp2)) {return false;}
        ExprVector vars;
        ExprMap matching;
        filter(exp1, bind::IsConst(), inserter(vars, vars.begin()));
@@ -1621,6 +1748,8 @@ namespace ufo
            if (find(baseconstrapps.begin(), baseconstrapps.end(), *it) == baseconstrapps.end()) {++it;}
            else {it = vars.erase(it);}
        }
+       //outs() << "Exp1 is " << exp1 << endl;
+       //outs() << "Exp2 is " << exp2 << endl;
        if (findMatching(exp1, exp2, vars, matching)) {
           //outs() << string(sp, ' ') << "expressions are isomorphic\n";
           return true;
@@ -1704,14 +1833,18 @@ namespace ufo
            //test if arg sizes are disequal
 
 	   //build disjunction
-	   ExprVector disequals;
+	   ExprVector relations;
 	   for (int i = 0; i < leftArgs.size(); i++) {
-              Expr diseq = mk<NEQ>(leftArgs[i], rightArgs[i]);
-	      disequals.push_back(diseq);
+              Expr rel;
+              if (isOpX<EQ>(inp)) {rel = mk<NEQ>(leftArgs[i], rightArgs[i]);}
+	      if (isOpX<NEQ>(inp)) {rel = mk<EQ>(leftArgs[i], rightArgs[i]);}
+	      relations.push_back(rel);
 	   }
-	   Expr disjunction = disjoin(disequals, efac);
+	   Expr fmla;
+	   if (isOpX<EQ>(inp)) {fmla = disjoin(relations, efac);}
+	   if (isOpX<NEQ>(inp)) {fmla = conjoin(relations, efac);}
 	   //outs() << string(sp+2, ' ') << "Final term: " << disjunction << '\n';
-	   res = disjunction;
+	   res = fmla;
 	   return true;
 	}
 	res = inp;
@@ -1826,10 +1959,14 @@ namespace ufo
 	  if (rightNestedTerms.size() != leftNestedTerms.size()) {return NULL;}
 	  ExprVector recombination;
 	  for (int i = 0; i < leftNestedTerms.size(); i++) {
-             auto tempExpr = mk<NEQ>(leftNestedTerms[i], rightNestedTerms[i]);
+             Expr tempExpr;
+             if (isOpX<EQ>(e)) {tempExpr = mk<NEQ>(leftNestedTerms[i], rightNestedTerms[i]);}
+	     if (isOpX<NEQ>(e)) {tempExpr = mk<EQ>(leftNestedTerms[i], rightNestedTerms[i]);}
 	     recombination.push_back(tempExpr);
 	  }
-	  Expr result = disjoin(recombination, efac);
+	  Expr result;
+	  if (isOpX<EQ>(e)) {result = disjoin(recombination, efac);}
+	  if (isOpX<NEQ>(e)) {result = conjoin(recombination, efac);}
 	  outs() << string(sp + 2, ' ') << "Recombined term is: " <<  result << '\n';
 	  return syntaxTransformation2(result);
        }
@@ -1889,6 +2026,94 @@ namespace ufo
     }
 
     //end of disproof section
+
+    //begin fuzzing section
+    Expr fuzz (Expr templateDecl, int d)
+    {
+      //am I looking at a list or a tree
+      int counter = 0;
+      for (int i = 1; i < templateDecl->arity()-1; i++) 
+        if (templateDecl->arg(i) == templateExp->last()) 
+          counter++;
+      if (counter == 1) //we found a list 
+      {
+         auto lst = mk<FAPP>(*find_if(constructors.begin(), constructors.end(), [templateDecl](Expr x){return (x->arity() == 2 && x->last() == templateDecl->last());}));
+         srand(time(NULL));
+         int r = rand() % d; 
+         for (int i = 0; i < r; i++)
+         {
+           ExprVector symbolVect;
+           symbolVect.push_back(templateDecl);
+           for (int j = 1; j < templateDecl->arity()-1; j++)
+            {
+               auto currentType = templateDecl->arg(j);
+               if (currentType == templateDecl->last())
+                 symbolVect.push_back(lst);
+               else
+               {
+                 auto v = spawnVar(currentType);
+                 symbolVect.push_back(v);
+               }
+            }
+            lst = mknary<FAPP>(symbolVect);
+         }
+         return lst;
+      }
+      else //we found a tree
+      {
+        Expr templateType = templateDecl->last();
+        ExprVector symbolVect;
+        ExprVector inductiveVars; //corresponds to S in pseudocode
+        symbolVect.push_back(templateDecl);
+        for (int i = 1; i < templateDecl->arity()-1; i++)
+        {
+          auto currentType = templateDecl->arg(i);
+          auto var = spawnVar(currentType);
+          symbolVect.push_back(var);
+          if (currentType == templateType)
+            inductiveVars.push_back(var);
+        }
+        Expr node = mknary<FAPP>(symbolVect); //corresponds to T in pseudocode
+        for (int i = 0; i < d; i++)
+        {
+          unsigned int maxSize = 1 << inductiveVars.size();
+          unsigned int r = (unsigned int) rand() % maxSize;
+          ExprVector newInductiveVars;
+          ExprVector newSymbolVect;
+          newSymbolVect.push_back(templateDecl);
+          for (unsigned int j = 0; j < inductiveVars.size(); j++)
+          {
+             unsigned int test = (r>>j) & 1;
+             if (test)
+             {
+               auto currentVar = inductiveVars[j];
+               ExprVector innerSymbolVect;
+               innerSymbolVect.push_back(templateDecl);
+               ExprVector innerInductiveVars;
+               for (int k = 1; k < templateDecl->arity()-1; k++)
+               {
+                  auto currentType = templateDecl->arg(k);
+                  auto var = spawnVar(currentType);
+                  innerSymbolVect.push_back(var);
+                  if (currentType == templateType)
+                     innerInductiveVars.push_back(var);
+               }
+               Expr newNode = mknary<FAPP>(innerSymbolVect);
+               replaceAll(node, currentVar, newNode);
+               newInductiveVars.insert(innerInductiveVars.begin(), innerInductiveVars.end());
+             }
+             else
+             {
+               auto currentVar = inductiveVars[j];
+               Expr newNode = mk<FAPP>(*find_if(constructors.begin(), constructors.end(), [templateDecl](Expr x){return (x->arity() == 2 && x->last() == templateDecl->last());}));
+               replaceAll(node, currentVar, newNode);
+             }
+             inductiveVars = newInductiveVars;
+          }
+          return node;
+        }
+      }
+    }
 
     bool proveByContradiction (Expr subgoal)
     {
@@ -2655,7 +2880,9 @@ namespace ufo
       }
 
       //if disproof flag enabled
-      if (disproofDepth > 0) {return disproof(goal);}
+      if (disproofDepth > 0) {
+         return disproof(goal);
+      }
 
       //dumpToFile(goal, assumptions);
 

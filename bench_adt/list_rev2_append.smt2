@@ -1,3 +1,4 @@
+(set-logic ALL)
 (declare-datatypes () ((Lst (cons (head Int) (tail Lst)) (nil))))
 
 (declare-fun append (Lst Lst) Lst)
